@@ -174,7 +174,7 @@ func main() {
 		c.Writer.Header().Set("Connection", "keep-alive")
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 
-		ticker := time.NewTicker(2 * time.Second) // SSE ticker slightly slower for logs
+		ticker := time.NewTicker(1 * time.Second) // 1s update frequency for real-time feel
 		defer ticker.Stop()
 
 		c.Stream(func(w io.Writer) bool {
