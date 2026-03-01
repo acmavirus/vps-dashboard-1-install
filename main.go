@@ -203,13 +203,30 @@ func main() {
 			c.JSON(404, gin.H{"error": "API route not found"})
 			return
 		}
-		f, err := publicFS.Open(strings.TrimPrefix(path, "/"))
-		if err == nil {
-			f.Close()
-			c.FileFromFS(path, http.FS(publicFS))
+
+		// Xử lý static files từ embedded FS
+		trimPath := strings.TrimPrefix(path, "/")
+		if trimPath == "" {
+			c.FileFromFS("index.html", http.FS(publicFS))
 			return
 		}
-		c.FileFromFS("index.html", http.FS(publicFS))
+
+		f, err := publicFS.Open(trimPath)
+		if err != nil {
+			// File không tồn tại -> Serve index.html cho SPA Routing
+			c.FileFromFS("index.html", http.FS(publicFS))
+			return
+		}
+
+		// Kiểm tra xem có phải là thư mục không (để tránh redirect loop)
+		stat, err := f.Stat()
+		f.Close()
+		if err == nil && stat.IsDir() {
+			c.FileFromFS("index.html", http.FS(publicFS))
+			return
+		}
+
+		c.FileFromFS(trimPath, http.FS(publicFS))
 	})
 
 	port := os.Getenv("PORT")
