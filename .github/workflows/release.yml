@@ -44,7 +44,7 @@ jobs:
       - name: Build Binary
         run: |
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-          go build -ldflags "-s -w" -o vps-dash-${{ matrix.goos }}-${{ matrix.goarch }} main.go
+          go build -ldflags "-s -w -X 'main.Version=${{ github.ref_name }}'" -o vps-dash-${{ matrix.goos }}-${{ matrix.goarch }} main.go
 
       - name: Release to GitHub
         uses: softprops/action-gh-release@v2

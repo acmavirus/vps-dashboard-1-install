@@ -2,6 +2,8 @@ package main
 
 import (
 	"embed"
+	"flag"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -19,6 +21,9 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
 )
+
+// Phiên bản ứng dụng (Sẽ được cập nhật khi build release)
+var Version = "v1.0.0"
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
@@ -39,6 +44,7 @@ type SystemStats struct {
 	NetSent      uint64  `json:"net_sent"`
 	NetRecv      uint64  `json:"net_recv"`
 	Timestamp    int64   `json:"timestamp"`
+	Version      string  `json:"version"`
 }
 
 func getStats() SystemStats {
@@ -70,6 +76,7 @@ func getStats() SystemStats {
 		NetSent:   netSent,
 		NetRecv:   netRecv,
 		Timestamp: time.Now().Unix(),
+		Version:   Version,
 	}
 }
 
@@ -89,6 +96,14 @@ func getLogs() (string, string) {
 }
 
 func main() {
+	vFlag := flag.Bool("v", false, "Hiển thị phiên bản")
+	flag.Parse()
+
+	if *vFlag {
+		fmt.Printf("VPS Dashboard Version: %s\n", Version)
+		return
+	}
+
 	r := gin.Default()
 
 	// Socket.io setup
@@ -96,16 +111,11 @@ func main() {
 
 	server.OnConnect("/", func(s socketio.Conn) error {
 		s.SetContext("")
-		log.Println("connected:", s.ID())
 		return nil
 	})
 
 	server.OnError("/", func(s socketio.Conn, e error) {
 		log.Println("meet error:", e)
-	})
-
-	server.OnDisconnect("/", func(s socketio.Conn, reason string) {
-		log.Println("closed", reason)
 	})
 
 	// Background loop to push stats and logs
@@ -120,14 +130,14 @@ func main() {
 				"path": path,
 			})
 
-			time.Sleep(1 * time.Second) // Cập nhật mỗi 1 giây cho "Live" thật sự
+			time.Sleep(1 * time.Second)
 		}
 	}()
 
 	go server.Serve()
 	defer server.Close()
 
-	// 1. HTTP Routes (Duy trì cho fallback hoặc legacy)
+	// 1. HTTP Routes
 	r.GET("/socket.io/*any", gin.WrapH(server))
 	r.POST("/socket.io/*any", gin.WrapH(server))
 
@@ -160,6 +170,6 @@ func main() {
 		c.FileFromFS("index.html", http.FS(publicFS))
 	})
 
-	log.Println("Dashboard LIVE đang chạy tại http://localhost:8900")
+	log.Printf("AcmaDash %s đang chạy tại http://0.0.0.0:8900\n", Version)
 	r.Run(":8900")
 }
