@@ -18,7 +18,6 @@ import {
     FileText,
     Menu,
     X,
-    CpuIcon,
     ArrowUpRight,
     CircleDot
 } from 'lucide-react';
@@ -40,7 +39,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 
-const Version = "1.1.4-Slate";
+const Version = "1.1.5-Slate-Final";
 
 interface Stats {
     cpu: number;
@@ -151,28 +150,26 @@ const App: React.FC = () => {
     }, []);
 
     return (
-        <div className="min-h-screen bg-background text-foreground flex flex-col font-sans dark selection:bg-primary/20">
-            {/* Soft Ambient Glows */}
-            <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10 bg-grid-white/[0.02] bg-[size:40px_40px]"></div>
-            <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
-                <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-blue-500/5 blur-[120px] rounded-full animate-pulse-slow"></div>
-                <div className="absolute bottom-0 right-1/4 w-[500px] h-[500px] bg-indigo-500/5 blur-[120px] rounded-full animate-pulse-slow"></div>
+        <div className="min-h-screen bg-background text-foreground flex flex-col font-sans selection:bg-primary/20 antialiased">
+            {/* Ambient Overlays */}
+            <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10 opacity-30">
+                <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.05),transparent_50%)]"></div>
             </div>
 
             <div className="flex flex-1 overflow-hidden relative">
-                {/* Desktop Sidebar - "Modern Slate" Darker accent */}
-                <aside className="hidden lg:flex flex-col w-20 bg-slate-950/40 border-r border-border items-center py-8 gap-12 backdrop-blur-xl">
-                    <div className="w-12 h-12 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center shadow-sm">
-                        <Server size={22} className="text-white" />
+                {/* Desktop Sidebar */}
+                <aside className="hidden lg:flex flex-col w-20 bg-card border-r border-border items-center py-8 gap-12 backdrop-blur-md">
+                    <div className="w-12 h-12 bg-primary/5 border border-primary/20 rounded-2xl flex items-center justify-center shadow-sm">
+                        <Server size={22} className="text-primary" />
                     </div>
                     <nav className="flex flex-col gap-8">
-                        <Button variant="ghost" size="icon" className="hover:bg-slate-800/50 rounded-2xl transition-all">
-                            <LayoutDashboard size={20} className="text-blue-400" />
+                        <Button variant="ghost" size="icon" className="hover:bg-secondary rounded-2xl transition-all">
+                            <LayoutDashboard size={20} className="text-primary" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-white rounded-2xl transition-all">
+                        <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground rounded-2xl transition-all">
                             <Activity size={20} />
                         </Button>
-                        <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-white rounded-2xl transition-all">
+                        <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground rounded-2xl transition-all">
                             <Terminal size={20} />
                         </Button>
                     </nav>
@@ -180,7 +177,7 @@ const App: React.FC = () => {
 
                 {/* Mobile Menu Backdrop */}
                 {isMobileMenuOpen && (
-                    <div className="lg:hidden fixed inset-0 bg-black/40 backdrop-blur-md z-40 transition-all duration-300" onClick={() => setIsMobileMenuOpen(false)}></div>
+                    <div className="lg:hidden fixed inset-0 bg-background/80 backdrop-blur-sm z-40 transition-all duration-300" onClick={() => setIsMobileMenuOpen(false)}></div>
                 )}
 
                 {/* Mobile Sidebar */}
@@ -188,204 +185,209 @@ const App: React.FC = () => {
                     <div className="p-8 flex flex-col h-full">
                         <div className="flex items-center justify-between mb-12">
                             <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 bg-blue-500/10 border border-blue-500/20 rounded-lg flex items-center justify-center">
-                                    <Server className="text-blue-400" size={16} />
+                                <div className="w-9 h-9 bg-primary/10 border border-primary/20 rounded-lg flex items-center justify-center">
+                                    <Server className="text-primary" size={18} />
                                 </div>
-                                <span className="font-bold uppercase tracking-tight text-xl">Acma<span className="text-blue-500 font-black">Dash</span></span>
+                                <span className="font-bold uppercase tracking-tight text-xl">Acma<span className="text-primary font-black">Dash</span></span>
                             </div>
-                            <Button variant="ghost" size="icon" className="text-muted-foreground" onClick={() => setIsMobileMenuOpen(false)}>
+                            <Button variant="ghost" size="icon" className="text-muted-foreground rounded-xl" onClick={() => setIsMobileMenuOpen(false)}>
                                 <X size={20} />
                             </Button>
                         </div>
                         <nav className="flex flex-col gap-3 flex-1">
-                            <Button variant="secondary" className="justify-start gap-4 text-xs font-bold uppercase tracking-widest h-14 rounded-2xl px-6">
-                                <LayoutDashboard size={18} /> Overview
+                            <Button variant="secondary" className="justify-start gap-4 text-xs font-bold uppercase tracking-widest h-14 rounded-2xl px-6 border border-border/50">
+                                <LayoutDashboard size={18} className="text-primary" /> Dashboard
                             </Button>
-                            <Button variant="ghost" className="justify-start gap-4 text-xs font-bold uppercase tracking-widest text-muted-foreground hover:text-white h-14 rounded-2xl px-6">
-                                <Activity size={18} /> Monitors
+                            <Button variant="ghost" className="justify-start gap-4 text-xs font-bold uppercase tracking-widest text-muted-foreground hover:text-foreground h-14 rounded-2xl px-6">
+                                <Activity size={18} /> Monitoring
                             </Button>
-                            <Button variant="ghost" className="justify-start gap-4 text-xs font-bold uppercase tracking-widest text-muted-foreground hover:text-white h-14 rounded-2xl px-6">
-                                <Terminal size={18} /> Terminal
+                            <Button variant="ghost" className="justify-start gap-4 text-xs font-bold uppercase tracking-widest text-muted-foreground hover:text-foreground h-14 rounded-2xl px-6">
+                                <Terminal size={18} /> Logs Terminal
                             </Button>
                         </nav>
+                        <div className="mt-auto">
+                            <div className="bg-secondary/50 border border-border p-4 rounded-2xl">
+                                <Badge variant="outline" className="text-[8px] font-black tracking-widest mb-2 border-primary/50 text-primary">ENCRYPTED</Badge>
+                                <p className="text-[10px] text-muted-foreground uppercase leading-tight font-bold">SSE Tunnel Active</p>
+                            </div>
+                        </div>
                     </div>
                 </aside>
 
-                <main className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-10 lg:p-12 space-y-10">
+                <main className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-10 space-y-10 bg-background">
                     <header className="flex flex-col md:flex-row items-center justify-between gap-6">
                         <div className="flex items-center justify-between w-full md:w-auto">
                             <div className="flex items-center gap-4 sm:gap-6">
-                                <Button variant="outline" size="icon" className="lg:hidden bg-card/40 border-border rounded-xl w-10 h-10 shadow-sm" onClick={() => setIsMobileMenuOpen(true)}>
+                                <Button variant="outline" size="icon" className="lg:hidden bg-card border-border rounded-xl w-10 h-10 shadow-sm" onClick={() => setIsMobileMenuOpen(true)}>
                                     <Menu size={20} />
                                 </Button>
                                 <div>
-                                    <h1 className="text-2xl sm:text-3xl font-black tracking-tight flex items-center gap-3 uppercase text-white">
-                                        Acma<span className="text-blue-500">Dash</span>
-                                        <Badge variant="outline" className="hidden xs:inline-flex border-blue-500/20 text-blue-400 bg-blue-500/5 h-6 px-2 text-[10px] font-bold">SLATE EDITION</Badge>
+                                    <h1 className="text-2xl sm:text-3xl font-black tracking-tight flex items-center gap-3 uppercase text-foreground">
+                                        Acma<span className="text-primary">Dash</span>
+                                        <Badge variant="outline" className="hidden xs:inline-flex border-primary/20 text-primary bg-primary/5 h-6 px-2 text-[10px] font-bold">SLATE V2</Badge>
                                     </h1>
-                                    <p className="text-[10px] sm:text-xs text-muted-foreground font-bold uppercase tracking-[0.2em] mt-1 italic">Real-time Infrastructure View</p>
+                                    <p className="text-[10px] sm:text-xs text-muted-foreground font-black uppercase tracking-[0.2em] mt-1">Infrastructure Control Center</p>
                                 </div>
                             </div>
                         </div>
 
                         <div className="flex items-center gap-3 w-full md:w-auto">
-                            <div className="hidden md:flex items-center gap-3 bg-secondary/50 px-5 py-2.5 rounded-2xl border border-border shadow-sm">
-                                <div className={`w-2 h-2 rounded-full ${connected ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.3)]" : "bg-amber-500"}`}></div>
-                                <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-foreground">
-                                    {connected ? "Live Operation" : "Connecting..."}
+                            <div className="hidden md:flex items-center gap-3 bg-secondary px-5 py-2.5 rounded-2xl border border-border">
+                                <div className={`w-2 h-2 rounded-full ${connected ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.2)]" : "bg-amber-500"}`}></div>
+                                <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">
+                                    {connected ? "Stream Established" : "Connecting..."}
                                 </span>
                             </div>
-                            <Button size="sm" variant="outline" className="rounded-2xl border-border bg-secondary/30 hover:bg-secondary flex-1 md:flex-initial text-[10px] sm:text-xs h-10 px-6 font-bold uppercase">
-                                <RefreshCcw size={14} className={`mr-2 ${connected ? "animate-spin-slow text-blue-400" : ""}`} /> Up: {stats ? formatUptime(stats.uptime) : 'SYNCING'}
+                            <Button size="sm" variant="outline" className="rounded-2xl border-border bg-secondary/50 hover:bg-secondary flex-1 md:flex-initial text-[10px] sm:text-xs h-10 px-6 font-bold uppercase shadow-sm">
+                                <RefreshCcw size={14} className={`mr-2 ${connected ? "animate-spin-slow text-primary" : ""}`} /> Uptime: {stats ? formatUptime(stats.uptime) : 'LOADING'}
                             </Button>
                         </div>
                     </header>
 
-                    <Tabs defaultValue="overview" className="space-y-8 animate-in fade-in duration-700">
+                    <Tabs defaultValue="overview" className="space-y-8 animate-in fade-in duration-500">
                         <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
-                            <TabsList className="bg-secondary/40 border border-border p-1 rounded-2xl w-full sm:w-auto">
-                                <TabsTrigger value="overview" className="flex-1 sm:flex-initial data-[state=active]:bg-card rounded-xl px-8 font-bold text-[10px] tracking-widest uppercase h-9 transition-all">Overview</TabsTrigger>
-                                <TabsTrigger value="logs" className="flex-1 sm:flex-initial data-[state=active]:bg-card rounded-xl px-8 font-bold text-[10px] tracking-widest uppercase h-9 transition-all">Terminal</TabsTrigger>
+                            <TabsList className="bg-secondary border border-border p-1 rounded-2xl w-full sm:w-auto shadow-sm">
+                                <TabsTrigger value="overview" className="flex-1 sm:flex-initial data-[state=active]:bg-card data-[state=active]:shadow-sm rounded-xl px-8 font-bold text-[10px] tracking-widest uppercase h-9 transition-all">Overview</TabsTrigger>
+                                <TabsTrigger value="logs" className="flex-1 sm:flex-initial data-[state=active]:bg-card data-[state=active]:shadow-sm rounded-xl px-8 font-bold text-[10px] tracking-widest uppercase h-9 transition-all">Terminal</TabsTrigger>
                             </TabsList>
-                            <div className="flex items-center gap-3 bg-secondary/30 px-4 py-2 rounded-xl text-muted-foreground text-[11px] font-bold uppercase border border-border shadow-sm">
-                                <Monitor size={14} /> {stats?.hostname || 'Unknown Host'}
+                            <div className="flex items-center gap-3 bg-secondary/30 px-4 py-2 rounded-xl text-muted-foreground text-[10px] font-black uppercase border border-border">
+                                <Monitor size={14} className="text-primary/70" /> {stats?.hostname || 'Resolving...'}
                             </div>
                         </div>
 
                         <TabsContent value="overview" className="space-y-8">
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                                <Card className="bg-card/50 border-border hover:border-blue-500/30 transition-all duration-300 shadow-sm relative overflow-hidden group">
+                                {/* Dashboard Cards - Standardized to bg-card */}
+                                <Card className="bg-card border-border hover:border-primary/30 transition-all duration-300 shadow-sm relative overflow-hidden group">
                                     <CardHeader className="pb-3 p-6 pt-5 flex flex-row items-center justify-between">
-                                        <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Processor</CardTitle>
-                                        <Cpu size={16} className="text-blue-500/70" />
+                                        <CardTitle className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.3em]">C-Processor</CardTitle>
+                                        <Cpu size={16} className="text-primary/70" />
                                     </CardHeader>
-                                    <CardContent className="p-6 pt-0 space-y-3">
-                                        <div className="text-3xl font-bold tracking-tighter text-foreground font-mono">{stats?.cpu.toFixed(1) || '0.0'}<span className="text-xs text-muted-foreground ml-1">%</span></div>
+                                    <CardContent className="p-6 pt-0 space-y-4">
+                                        <div className="text-4xl font-black italic tracking-tighter text-foreground">{stats?.cpu.toFixed(1) || '0.0'}<span className="text-sm text-muted-foreground ml-1 uppercase">%</span></div>
                                         <Progress value={stats?.cpu || 0} className="h-2 bg-secondary rounded-full"
-                                            indicatorClassName={stats && stats.cpu > 80 ? "bg-destructive shadow-[0_0_8px_rgba(239,68,68,0.3)]" : "bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.2)]"}
+                                            indicatorClassName={stats && stats.cpu > 80 ? "bg-destructive shadow-[0_0_8px_rgba(239,68,68,0.2)]" : "bg-primary shadow-[0_0_8px_rgba(255,255,255,0.1)]"}
                                         />
                                     </CardContent>
-                                    <CardFooter className="p-4 py-3 bg-secondary/[0.3] text-[9px] text-muted-foreground font-bold uppercase tracking-widest flex justify-between">
-                                        System Load <ArrowUpRight size={10} />
+                                    <CardFooter className="p-4 py-3 bg-secondary/20 text-[9px] text-muted-foreground font-black uppercase tracking-[0.2em] border-t border-border/20">
+                                        Core Load Signal
                                     </CardFooter>
                                 </Card>
 
-                                <Card className="bg-card/50 border-border hover:border-emerald-500/30 transition-all duration-300 shadow-sm relative overflow-hidden group">
+                                <Card className="bg-card border-border hover:border-emerald-500/30 transition-all duration-300 shadow-sm relative overflow-hidden group">
                                     <CardHeader className="pb-3 p-6 pt-5 flex flex-row items-center justify-between">
-                                        <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Data RAM</CardTitle>
+                                        <CardTitle className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.3em]">M-Storage</CardTitle>
                                         <Database size={16} className="text-emerald-500/70" />
                                     </CardHeader>
-                                    <CardContent className="p-6 pt-0 space-y-3">
-                                        <div className="text-3xl font-bold tracking-tighter text-foreground font-mono">{stats?.ram.toFixed(1) || '0.0'}<span className="text-xs text-muted-foreground ml-1">%</span></div>
+                                    <CardContent className="p-6 pt-0 space-y-4">
+                                        <div className="text-4xl font-black italic tracking-tighter text-foreground">{stats?.ram.toFixed(1) || '0.0'}<span className="text-sm text-muted-foreground ml-1 uppercase">%</span></div>
                                         <Progress value={stats?.ram || 0} className="h-2 bg-secondary rounded-full"
-                                            indicatorClassName="bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.2)]"
+                                            indicatorClassName="bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.1)]"
                                         />
                                     </CardContent>
-                                    <CardFooter className="p-4 py-3 bg-secondary/[0.3] text-[9px] text-muted-foreground font-bold uppercase tracking-widest flex justify-between w-full">
-                                        <span>{stats ? formatBytes(stats.ram_used) : '0.00'}</span>
-                                        <span className="opacity-50">/ {stats ? formatBytes(stats.ram_total).split(' ')[0] : '0.00'}</span>
+                                    <CardFooter className="p-4 py-3 bg-secondary/20 text-[9px] text-muted-foreground font-black uppercase tracking-[0.2em] flex justify-between w-full border-t border-border/20">
+                                        <span>USED: {stats ? formatBytes(stats.ram_used) : '0.00'}</span>
+                                        <span className="opacity-40">OF {stats ? formatBytes(stats.ram_total).split(' ')[0] : '0.00'}</span>
                                     </CardFooter>
                                 </Card>
 
-                                <Card className="bg-card/50 border-border hover:border-amber-500/30 transition-all duration-300 shadow-sm relative overflow-hidden group">
+                                <Card className="bg-card border-border hover:border-amber-500/30 transition-all duration-300 shadow-sm relative overflow-hidden group">
                                     <CardHeader className="pb-3 p-6 pt-5 flex flex-row items-center justify-between">
-                                        <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Storage</CardTitle>
+                                        <CardTitle className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.3em]">H-Storage</CardTitle>
                                         <HardDrive size={16} className="text-amber-500/70" />
                                     </CardHeader>
-                                    <CardContent className="p-6 pt-0 space-y-3">
-                                        <div className="text-3xl font-bold tracking-tighter text-foreground font-mono">{stats?.disk.toFixed(1) || '0.0'}<span className="text-xs text-muted-foreground ml-1">%</span></div>
+                                    <CardContent className="p-6 pt-0 space-y-4">
+                                        <div className="text-4xl font-black italic tracking-tighter text-foreground">{stats?.disk.toFixed(1) || '0.0'}<span className="text-sm text-muted-foreground ml-1 uppercase">%</span></div>
                                         <Progress value={stats?.disk || 0} className="h-2 bg-secondary rounded-full"
-                                            indicatorClassName="bg-amber-500"
+                                            indicatorClassName="bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.1)]"
                                         />
                                     </CardContent>
-                                    <CardFooter className="p-4 py-3 bg-secondary/[0.3] text-[9px] text-muted-foreground font-bold uppercase tracking-widest">
-                                        Free: {stats ? formatBytes(stats.disk_total - stats.disk_used) : '---'}
+                                    <CardFooter className="p-4 py-3 bg-secondary/20 text-[9px] text-muted-foreground font-black uppercase tracking-[0.2em] border-t border-border/20">
+                                        REMAIN: {stats ? formatBytes(stats.disk_total - stats.disk_used) : '---'}
                                     </CardFooter>
                                 </Card>
 
-                                <Card className="bg-card/50 border-border hover:border-indigo-500/30 transition-all duration-300 shadow-sm relative overflow-hidden group">
+                                <Card className="bg-card border-border hover:border-indigo-500/30 transition-all duration-300 shadow-sm relative overflow-hidden group">
                                     <CardHeader className="pb-3 p-6 pt-5 flex flex-row items-center justify-between">
-                                        <CardTitle className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Networking</CardTitle>
+                                        <CardTitle className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.3em]">N-Interface</CardTitle>
                                         <CloudLightning size={16} className="text-indigo-500/70" />
                                     </CardHeader>
-                                    <CardContent className="p-6 pt-0 space-y-3">
-                                        <div className="text-3xl font-bold tracking-tighter text-foreground truncate font-mono">
+                                    <CardContent className="p-6 pt-0 space-y-4">
+                                        <div className="text-3xl font-black italic tracking-tighter text-foreground truncate drop-shadow-sm">
                                             {stats ? formatBytes(stats.net_recv) : '0.00 GB'}
                                         </div>
-                                        <div className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest opacity-60">Inbound Payload</div>
+                                        <div className="text-[10px] text-muted-foreground font-black uppercase tracking-widest opacity-60">Inbound Load</div>
                                     </CardContent>
-                                    <CardFooter className="p-4 py-3 bg-secondary/[0.3] text-[9px] text-muted-foreground font-bold uppercase tracking-widest flex justify-between w-full">
-                                        <span>SENT: {stats ? formatBytes(stats.net_sent).split(' ')[0] : '0.00'}</span>
-                                        <span className="flex items-center gap-1 text-indigo-400 font-mono">{stats?.connections || 0} CONNS</span>
+                                    <CardFooter className="p-4 py-3 bg-secondary/20 text-[9px] text-muted-foreground font-black uppercase tracking-[0.2em] flex justify-between w-full border-t border-border/20">
+                                        <span>TX: {stats ? formatBytes(stats.net_sent).split(' ')[0] : '0.00'}</span>
+                                        <span className="flex items-center gap-2 text-primary/70">{stats?.connections || 0} CONNS</span>
                                     </CardFooter>
                                 </Card>
                             </div>
 
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                                <Card className="lg:col-span-2 bg-card/60 border-border shadow-sm">
-                                    <CardHeader className="flex flex-row items-center justify-between p-6 sm:p-8">
+                                <Card className="lg:col-span-2 bg-card border-border shadow-sm">
+                                    <CardHeader className="flex flex-row items-center justify-between p-6 sm:p-8 pb-4">
                                         <div>
-                                            <CardTitle className="text-base font-bold uppercase tracking-widest text-foreground">Live Telemetry</CardTitle>
-                                            <CardDescription className="text-[11px] uppercase font-bold text-muted-foreground mt-1">CPU Oscillation / Sec</CardDescription>
+                                            <CardTitle className="text-lg font-black uppercase tracking-[0.2em] text-foreground italic">Spectral Telemetry</CardTitle>
+                                            <CardDescription className="text-[10px] uppercase font-black text-muted-foreground mt-1">CPU Oscillation / 60s Buffer</CardDescription>
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
-                                            <span className="text-[10px] font-bold uppercase text-muted-foreground tracking-widest">Live Flow</span>
-                                        </div>
+                                        <Badge variant="secondary" className="bg-primary/5 text-primary border border-primary/20 text-[9px] font-black px-3 h-7 tracking-widest">LIVE DATA</Badge>
                                     </CardHeader>
-                                    <CardContent className="h-[300px] sm:h-[400px] p-0 overflow-hidden">
+                                    <CardContent className="h-[300px] sm:h-[450px] p-0 overflow-hidden pt-6">
                                         <ResponsiveContainer width="100%" height="100%">
-                                            <AreaChart data={history} margin={{ left: -10, right: 10, top: 10, bottom: 0 }}>
+                                            <AreaChart data={history} margin={{ left: -10, right: 10, top: 0, bottom: 0 }}>
                                                 <defs>
                                                     <linearGradient id="colorCpu" x1="0" y1="0" x2="0" y2="1">
-                                                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
-                                                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                                                        <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.15} />
+                                                        <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
                                                     </linearGradient>
                                                 </defs>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#ffffff05" />
-                                                <XAxis dataKey="time" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} minTickGap={50} tick={{ fontWeight: '700' }} />
-                                                <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} domain={[0, 100]} tick={{ fontWeight: '700' }} />
+                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.1)" />
+                                                <XAxis dataKey="time" stroke="hsl(var(--muted-foreground))" fontSize={9} tickLine={false} axisLine={false} minTickGap={50} tick={{ fontWeight: '900' }} />
+                                                <YAxis stroke="hsl(var(--muted-foreground))" fontSize={9} tickLine={false} axisLine={false} domain={[0, 100]} tick={{ fontWeight: '900' }} />
                                                 <Tooltip
                                                     contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '12px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}
-                                                    itemStyle={{ color: 'hsl(var(--foreground))', fontWeight: 'bold' }}
+                                                    itemStyle={{ color: 'hsl(var(--primary))', fontWeight: '900', fontSize: '13px' }}
+                                                    labelStyle={{ color: 'hsl(var(--muted-foreground))', fontSize: '10px', fontWeight: '900', textTransform: 'uppercase' }}
                                                 />
-                                                <Area type="monotone" dataKey="cpu" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorCpu)" animationDuration={300} isAnimationActive={history.length < 2} />
+                                                <Area type="monotone" dataKey="cpu" stroke="hsl(var(--primary))" strokeWidth={3} fillOpacity={1} fill="url(#colorCpu)" animationDuration={300} isAnimationActive={history.length < 2} />
                                             </AreaChart>
                                         </ResponsiveContainer>
                                     </CardContent>
                                 </Card>
 
                                 <div className="space-y-6">
-                                    <Card className="bg-card/40 border-border">
-                                        <CardHeader className="pb-4 p-6">
-                                            <CardTitle className="text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground">System Manifest</CardTitle>
+                                    <Card className="bg-card border-border shadow-sm">
+                                        <CardHeader className="pb-4 p-8">
+                                            <CardTitle className="text-[10px] font-black italic tracking-[0.4em] uppercase text-muted-foreground">Local Context</CardTitle>
                                         </CardHeader>
-                                        <CardContent className="space-y-5 p-6 pt-0">
+                                        <CardContent className="space-y-6 p-8 pt-0">
                                             <div className="flex items-center justify-between">
-                                                <span className="text-[10px] font-bold text-muted-foreground uppercase">OS Platform</span>
-                                                <span className="text-xs font-bold uppercase italic text-foreground">{stats?.platform || 'Checking...'}</span>
+                                                <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest">OS Base</span>
+                                                <span className="text-[11px] font-black text-foreground uppercase italic px-3 py-1 bg-secondary rounded-lg border border-border/50">{stats?.platform || 'LINUX'}</span>
                                             </div>
-                                            <Separator className="bg-border/50" />
+                                            <Separator className="bg-border/30" />
                                             <div className="flex items-center justify-between">
-                                                <span className="text-[10px] font-bold text-muted-foreground uppercase">Kernel</span>
-                                                <span className="text-[11px] font-bold text-foreground truncate max-w-[120px]">{stats?.kernel || '---'}</span>
+                                                <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest">Build ID</span>
+                                                <span className="text-[10px] font-black text-muted-foreground truncate max-w-[130px] font-mono">{stats?.kernel || '---'}</span>
                                             </div>
-                                            <Separator className="bg-border/50" />
+                                            <Separator className="bg-border/30" />
                                             <div className="flex items-center justify-between">
-                                                <span className="text-[10px] font-bold text-muted-foreground uppercase">Protection</span>
-                                                <Badge className="bg-emerald-500/10 text-emerald-500 border-none text-[9px] font-bold uppercase px-3 h-6">Active</Badge>
+                                                <span className="text-[9px] font-black text-muted-foreground uppercase tracking-widest">Sentinel</span>
+                                                <Badge className="bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[9px] font-black uppercase px-3 h-6">Operational</Badge>
                                             </div>
                                         </CardContent>
                                     </Card>
 
-                                    <Card className="bg-blue-500/[0.03] border-border border-dashed">
-                                        <CardContent className="p-8 flex flex-col items-center text-center gap-4">
-                                            <div className="p-4 bg-blue-500/10 rounded-full">
-                                                <ShieldCheck size={32} className="text-blue-500" />
+                                    <Card className="bg-primary/5 border-border border-dashed shadow-sm">
+                                        <CardContent className="p-10 flex flex-col items-center text-center gap-6">
+                                            <div className="p-5 bg-card border border-border rounded-full shadow-inner ring-4 ring-primary/5">
+                                                <ShieldCheck size={36} className="text-primary/70" />
                                             </div>
                                             <div>
-                                                <h4 className="text-[11px] font-bold uppercase tracking-widest text-foreground mb-2">Automated Sentinel</h4>
-                                                <p className="text-[10px] text-muted-foreground font-medium leading-relaxed uppercase">Threat monitoring and protocol alerts are operational in the dedicated background thread.</p>
+                                                <h4 className="text-[11px] font-black uppercase tracking-[0.3em] text-foreground mb-3 italic underline decoration-primary/30 decoration-2 underline-offset-4">Security Protocol</h4>
+                                                <p className="text-[10px] text-muted-foreground font-bold leading-relaxed uppercase tracking-tighter">Automated DDoS filtration and global alerts initialized in secondary thread.</p>
                                             </div>
                                         </CardContent>
                                     </Card>
@@ -395,99 +397,96 @@ const App: React.FC = () => {
 
                         <TabsContent value="logs" className="space-y-6">
                             <div className="flex flex-col lg:flex-row gap-8 h-auto lg:h-[750px] items-stretch">
-                                {/* Side Nav - Soft Darker than main */}
-                                <Card className="hidden lg:flex flex-col w-72 bg-secondary/20 border-border shadow-sm h-full">
-                                    <CardHeader className="p-6 pb-2">
-                                        <CardTitle className="text-[10px] font-bold uppercase tracking-[0.4em] text-muted-foreground">Data Streams</CardTitle>
+                                {/* Side Nav - Consistent Sidebar UI */}
+                                <Card className="hidden lg:flex flex-col w-72 bg-card border-border shadow-sm h-full overflow-hidden">
+                                    <CardHeader className="p-8 pb-4">
+                                        <CardTitle className="text-[10px] font-black uppercase tracking-[0.5em] text-muted-foreground opacity-60">Source Pipelines</CardTitle>
                                     </CardHeader>
-                                    <CardContent className="p-3 space-y-1">
+                                    <CardContent className="p-4 space-y-2">
                                         <Button
                                             onClick={() => setLogTab('system')}
                                             variant={logTab === 'system' ? 'secondary' : 'ghost'}
-                                            className={`w-full justify-start rounded-xl font-bold text-xs uppercase h-12 transition-all gap-3 ${logTab === 'system' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground'}`}
+                                            className={`w-full justify-start rounded-2xl font-black text-[11px] uppercase italic tracking-widest h-14 transition-all gap-4 border ${logTab === 'system' ? 'bg-primary/10 border-primary/20 text-foreground' : 'text-muted-foreground border-transparent hover:bg-secondary'}`}
                                         >
-                                            <Terminal size={18} className={logTab === 'system' ? 'text-blue-500' : 'text-slate-600'} /> System Logs
+                                            <Terminal size={18} className={logTab === 'system' ? 'text-primary' : 'text-muted-foreground'} /> Sys Journal
                                         </Button>
                                         <Button
                                             onClick={() => setLogTab('nginx_access')}
                                             variant={logTab === 'nginx_access' ? 'secondary' : 'ghost'}
-                                            className={`w-full justify-start rounded-xl font-bold text-xs uppercase h-12 transition-all gap-3 ${logTab === 'nginx_access' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground'}`}
+                                            className={`w-full justify-start rounded-2xl font-black text-[11px] uppercase italic tracking-widest h-14 transition-all gap-4 border ${logTab === 'nginx_access' ? 'bg-primary/10 border-primary/20 text-foreground' : 'text-muted-foreground border-transparent hover:bg-secondary'}`}
                                         >
-                                            <Globe size={18} className={logTab === 'nginx_access' ? 'text-emerald-500' : 'text-slate-600'} /> Nginx Access
+                                            <Globe size={18} className={logTab === 'nginx_access' ? 'text-emerald-500' : 'text-muted-foreground'} /> Web Inbound
                                         </Button>
                                         <Button
                                             onClick={() => setLogTab('nginx_error')}
                                             variant={logTab === 'nginx_error' ? 'secondary' : 'ghost'}
-                                            className={`w-full justify-start rounded-xl font-bold text-xs uppercase h-12 transition-all gap-3 ${logTab === 'nginx_error' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground'}`}
+                                            className={`w-full justify-start rounded-2xl font-black text-[11px] uppercase italic tracking-widest h-14 transition-all gap-4 border ${logTab === 'nginx_error' ? 'bg-primary/10 border-primary/20 text-foreground' : 'text-muted-foreground border-transparent hover:bg-secondary'}`}
                                         >
-                                            <AlertTriangle size={18} className={logTab === 'nginx_error' ? 'text-rose-500' : 'text-slate-600'} /> Nginx Errors
+                                            <AlertTriangle size={18} className={logTab === 'nginx_error' ? 'text-rose-500' : 'text-muted-foreground'} /> Web Crits
                                         </Button>
                                     </CardContent>
-                                    <div className="mt-auto p-6 space-y-4">
-                                        <Separator className="bg-border/50" />
-                                        <div className="bg-background/50 p-4 rounded-xl border border-border">
-                                            <div className="flex items-center gap-2 mb-2">
-                                                <CircleDot size={10} className="text-emerald-500 animate-pulse" />
-                                                <span className="text-[9px] font-bold uppercase text-muted-foreground">Pipe Connectivity</span>
-                                            </div>
-                                            <p className="text-[9px] text-muted-foreground font-medium italic">Establishing persistent SSE tunnel to remote log buffers...</p>
+                                    <div className="mt-auto p-8 border-t border-border/10 bg-secondary/10">
+                                        <div className="flex items-center gap-3 mb-3">
+                                            <CircleDot size={12} className="text-emerald-500 animate-pulse" />
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Buffer Health</span>
+                                        </div>
+                                        <div className="h-1 w-full bg-border/20 rounded-full overflow-hidden">
+                                            <div className="h-full w-[85%] bg-primary/40"></div>
                                         </div>
                                     </div>
                                 </Card>
 
                                 {/* Mobile Log Switcher */}
-                                <div className="lg:hidden flex overflow-x-auto gap-2 pb-4 no-scrollbar">
-                                    <Button
-                                        onClick={() => setLogTab('system')}
-                                        className={`rounded-xl font-bold text-[10px] uppercase h-12 px-6 whitespace-nowrap transition-all border ${logTab === 'system' ? 'bg-blue-600 border-transparent text-white' : 'bg-card border-border text-muted-foreground'}`}
-                                    >
-                                        System Journal
-                                    </Button>
-                                    <Button
-                                        onClick={() => setLogTab('nginx_access')}
-                                        className={`rounded-xl font-bold text-[10px] uppercase h-12 px-6 whitespace-nowrap transition-all border ${logTab === 'nginx_access' ? 'bg-blue-600 border-transparent text-white' : 'bg-card border-border text-muted-foreground'}`}
-                                    >
-                                        Nginx Inbound
-                                    </Button>
-                                    <Button
-                                        onClick={() => setLogTab('nginx_error')}
-                                        className={`rounded-xl font-bold text-[10px] uppercase h-12 px-6 whitespace-nowrap transition-all border ${logTab === 'nginx_error' ? 'bg-blue-600 border-transparent text-white' : 'bg-card border-border text-muted-foreground'}`}
-                                    >
-                                        Nginx Crits
-                                    </Button>
+                                <div className="lg:hidden flex overflow-x-auto gap-3 pb-4 no-scrollbar">
+                                    {(['system', 'nginx_access', 'nginx_error'] as const).map((tab) => (
+                                        <Button
+                                            key={tab}
+                                            onClick={() => setLogTab(tab)}
+                                            className={`rounded-2xl font-black text-[10px] uppercase h-12 px-8 whitespace-nowrap transition-all border ${logTab === tab ? 'bg-primary border-transparent text-primary-foreground shadow-lg' : 'bg-card border-border text-muted-foreground'}`}
+                                        >
+                                            {tab === 'system' ? 'System' : tab === 'nginx_access' ? 'Web Access' : 'Web Errors'}
+                                        </Button>
+                                    ))}
                                 </div>
 
-                                {/* Terminal Content */}
-                                <Card className="flex-1 bg-card/40 border-border shadow-xl overflow-hidden flex flex-col h-[550px] lg:h-full backdrop-blur-3xl">
-                                    <CardHeader className="bg-secondary/20 border-b border-border p-4 sm:p-6 flex flex-row items-center justify-between">
+                                {/* Terminal Content - Refined Slate Background, No Pitch Black */}
+                                <Card className="flex-1 bg-secondary/10 border-border shadow-2xl overflow-hidden flex flex-col h-[550px] lg:h-full backdrop-blur-xl group">
+                                    <CardHeader className="bg-card border-b border-border p-4 sm:p-8 flex flex-row items-center justify-between shadow-sm">
                                         <div className="flex items-center gap-4">
                                             <div className="hidden xs:flex gap-2">
-                                                <div className="w-3 h-3 rounded-full bg-slate-800"></div>
-                                                <div className="w-3 h-3 rounded-full bg-slate-800"></div>
-                                                <div className="w-3 h-3 rounded-full bg-slate-800"></div>
+                                                <div className="w-3 h-3 rounded-full bg-border/40"></div>
+                                                <div className="w-3 h-3 rounded-full bg-border/40"></div>
+                                                <div className="w-3 h-3 rounded-full bg-border/40"></div>
                                             </div>
-                                            <div className="hidden xs:block h-5 w-px bg-border mx-2"></div>
-                                            <div className="flex items-center gap-2 text-[10px] sm:text-[11px] font-bold text-foreground uppercase tracking-widest truncate">
-                                                <FileText size={14} className="text-muted-foreground" /> {logs?.[logTab]?.path || 'Locating stream...'}
+                                            <div className="hidden xs:block h-6 w-px bg-border/50 mx-2"></div>
+                                            <div className="flex flex-col">
+                                                <span className="text-[8px] font-black text-muted-foreground uppercase tracking-[0.3em] mb-1">Tailstream Output</span>
+                                                <div className="flex items-center gap-3 text-[10px] sm:text-[13px] font-black text-foreground uppercase tracking-tight truncate">
+                                                    <FileText size={16} className="text-primary/60" /> {logs?.[logTab]?.path || 'Loading stream...'}
+                                                </div>
                                             </div>
                                         </div>
-                                        <Badge variant="outline" className="text-[8px] font-bold border-border bg-background/50 text-muted-foreground uppercase px-3 h-7 tracking-widest">LIVE PIPE</Badge>
+                                        <Badge variant="outline" className="text-[8px] font-black border-border bg-secondary/50 text-muted-foreground uppercase px-4 h-8 tracking-widest hidden sm:flex">SSE TUNNEL ONLINE</Badge>
                                     </CardHeader>
-                                    <CardContent className="p-0 flex-1 overflow-hidden">
-                                        <ScrollArea className="h-full w-full p-6 sm:p-10 bg-[#00000010]">
-                                            <pre className="text-blue-50/90 font-mono text-[11px] sm:text-xs md:text-sm whitespace-pre-wrap leading-relaxed tracking-tight selection:bg-blue-500/20">
-                                                {/* Use muted-foreground for older lines or formatting - currently showing all white for readability */}
-                                                {logs?.[logTab]?.content || 'Bufferizing incoming telemetry...'}
+                                    <CardContent className="p-0 flex-1 overflow-hidden relative">
+                                        <ScrollArea className="h-full w-full p-6 sm:p-12">
+                                            <pre className="text-foreground/90 font-mono text-[11px] sm:text-xs md:text-sm whitespace-pre-wrap leading-relaxed tracking-tight selection:bg-primary/20 drop-shadow-sm">
+                                                {logs?.[logTab]?.content || 'Bufferizing encrypted telemetric stream...'}
                                             </pre>
                                             <div className="h-20"></div>
                                         </ScrollArea>
                                     </CardContent>
-                                    <div className="px-6 py-4 flex items-center justify-between bg-background/50 border-t border-border text-muted-foreground text-[10px] font-bold uppercase tracking-widest italic">
-                                        <div className="flex items-center gap-3">
-                                            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-                                            <span>Stream Connected</span>
+                                    <Separator className="bg-border/30" />
+                                    <div className="px-8 py-5 flex items-center justify-between bg-card text-muted-foreground text-[10px] font-black uppercase tracking-[0.3em] italic shadow-inner">
+                                        <div className="flex items-center gap-4">
+                                            <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]"></span>
+                                            <span className="hidden xs:inline">Persistent Link Active</span>
+                                            <span className="xs:hidden">Live</span>
                                         </div>
-                                        <RefreshCcw size={12} className="animate-spin-slow opacity-50" />
+                                        <div className="flex items-center gap-6">
+                                            <span className="hidden sm:inline opacity-30">Auto-tail: 30L</span>
+                                            <RefreshCcw size={14} className="animate-spin-slow text-primary/60" />
+                                        </div>
                                     </div>
                                 </Card>
                             </div>
@@ -496,25 +495,25 @@ const App: React.FC = () => {
                 </main>
             </div>
 
-            <footer className="mt-auto p-10 sm:p-16 border-t border-border bg-card/30 relative overflow-hidden backdrop-blur-xl">
+            <footer className="mt-auto p-12 sm:p-20 border-t border-border bg-card/60 backdrop-blur-3xl relative overflow-hidden">
                 <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-12">
-                    <div className="flex items-center gap-12 sm:gap-16">
+                    <div className="flex items-center gap-12 sm:gap-20">
                         <div className="flex flex-col">
-                            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.4em] mb-2">Primary Core</span>
-                            <span className="text-sm font-black text-foreground italic uppercase">AcmaDash Engine v{Version}</span>
+                            <span className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.6em] mb-3">Project Engine</span>
+                            <span className="text-sm font-black text-foreground italic uppercase tracking-widest">AcmaDash Core <span className="text-primary ml-1 pr-2 border-r-2 border-primary/20">v{Version}</span></span>
                         </div>
-                        <div className="hidden xs:block h-10 w-px bg-border"></div>
-                        <div className="flex flex-col">
-                            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.4em] mb-2">Modern Slate UI</span>
-                            <span className="text-sm font-bold text-muted-foreground uppercase tracking-widest">Premium Optimized</span>
+                        <div className="hidden sm:flex flex-col">
+                            <span className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.6em] mb-3">UI Manifest</span>
+                            <span className="text-sm font-black text-muted-foreground uppercase tracking-widest italic">Slate Elite v2024</span>
                         </div>
                     </div>
 
                     <div className="flex flex-col items-center md:items-end">
-                        <div className="flex items-center gap-3 mb-1">
-                            <span className="text-[11px] font-bold text-foreground uppercase tracking-widest italic">Protected Ecosystem</span>
+                        <div className="flex items-center gap-4 mb-3">
+                            <div className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_12px_rgba(255,255,255,0.2)] animate-pulse"></div>
+                            <span className="text-[11px] font-black text-foreground uppercase tracking-[0.4em] italic leading-none">Security Node Live</span>
                         </div>
-                        <span className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.3em]">&copy; 2024 AcmaTvirus Intelligence Ops</span>
+                        <span className="text-[9px] font-black text-muted-foreground uppercase tracking-[0.4em] mt-3">&copy; 2024 AcmaTvirus Intelligence Systems</span>
                     </div>
                 </div>
             </footer>
@@ -525,7 +524,7 @@ const App: React.FC = () => {
                     to { transform: rotate(360deg); }
                 }
                 .animate-spin-slow {
-                    animation: spin-slow 8s linear infinite;
+                    animation: spin-slow 10s linear infinite;
                 }
                 .no-scrollbar::-webkit-scrollbar {
                     display: none;
