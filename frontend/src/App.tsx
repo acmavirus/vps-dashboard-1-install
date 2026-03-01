@@ -26,6 +26,8 @@ import {
     ResponsiveContainer
 } from 'recharts';
 
+const Version = "1.0.2-SSE";
+
 interface Stats {
     cpu: number;
     ram: number;
