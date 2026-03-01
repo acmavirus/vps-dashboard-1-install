@@ -1,6 +1,5 @@
 # Binaries
-vps-dash
-vps-dash-*
+vps-dash*
 
 # Node.js
 frontend/node_modules
