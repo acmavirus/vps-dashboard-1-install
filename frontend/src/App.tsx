@@ -67,7 +67,7 @@ const App: React.FC = () => {
 
     useEffect(() => {
         // Socket.io for LIVE stats and logs
-        const socket = io({ transports: ['websocket'] });
+        const socket = io();
 
         socket.on('connect', () => {
             setConnected(true);

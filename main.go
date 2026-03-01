@@ -16,6 +16,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	socketio "github.com/googollee/go-socket.io"
+	"github.com/googollee/go-socket.io/engineio"
+	"github.com/googollee/go-socket.io/engineio/transport"
+	"github.com/googollee/go-socket.io/engineio/transport/polling"
+	"github.com/googollee/go-socket.io/engineio/transport/websocket"
 	"github.com/joho/godotenv"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
@@ -29,7 +33,6 @@ var Version = "v1.0.1"
 //go:embed all:frontend/dist
 var frontendFS embed.FS
 
-// Cooldown timer: 5 phút để tránh spam thông báo liên tục
 var (
 	lastCpuAlert  time.Time
 	lastDdosAlert time.Time
@@ -50,7 +53,7 @@ type SystemStats struct {
 	Kernel       string  `json:"kernel"`
 	NetSent      uint64  `json:"net_sent"`
 	NetRecv      uint64  `json:"net_recv"`
-	Connections  int     `json:"connections"` // Số lượng kết nối mạng
+	Connections  int     `json:"connections"`
 	Timestamp    int64   `json:"timestamp"`
 	Version      string  `json:"version"`
 }
@@ -58,23 +61,19 @@ type SystemStats struct {
 func sendTelegram(message string) {
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	chatID := os.Getenv("TELEGRAM_CHAT_ID")
-
 	if token == "" || chatID == "" {
 		return
 	}
-
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 	resp, err := http.PostForm(apiURL, url.Values{
 		"chat_id": {chatID},
 		"text":    {message},
 	})
-
 	if err != nil {
-		log.Printf("[ERROR] Cảnh báo Telegram thất bại: %v", err)
+		log.Printf("[ERROR] Telegram alert failed: %v", err)
 		return
 	}
 	defer resp.Body.Close()
-	log.Printf("[SUCCESS] Đã gửi cảnh báo Telegram: %s", message)
 }
 
 func getStats() SystemStats {
@@ -83,7 +82,7 @@ func getStats() SystemStats {
 	d, _ := disk.Usage("/")
 	h, _ := host.Info()
 	n, _ := net.IOCounters(false)
-	c, _ := net.Connections("tcp") // Có thể chậm nếu có quá nhiều kết nối
+	c, _ := net.Connections("tcp")
 
 	var netSent, netRecv uint64
 	if len(n) > 0 {
@@ -111,16 +110,14 @@ func getStats() SystemStats {
 		Version:     Version,
 	}
 
-	// 1. Kiểm tra cảnh báo CPU > 90%
 	if stats.CPU > 90.0 && time.Since(lastCpuAlert) > 5*time.Minute {
-		msg := fmt.Sprintf("🚨 [CẢNH BÁO CPU] VPS: %s\nCPU đang nhảy tải quá cao: %.1f%%", stats.Hostname, stats.CPU)
+		msg := fmt.Sprintf("🚨 [CPU ALERT] VPS: %s\nLoad is too high: %.1f%%", stats.Hostname, stats.CPU)
 		go sendTelegram(msg)
 		lastCpuAlert = time.Now()
 	}
 
-	// 2. Kiểm tra DDoS (Nếu số lượng kết nối TCP vượt quá 1500)
 	if stats.Connections > 1500 && time.Since(lastDdosAlert) > 10*time.Minute {
-		msg := fmt.Sprintf("⚠️ [CẢNH BÁO DDoS] VPS: %s\nPhát hiện %d kết nối TCP đang hoạt động! Có thể hệ thống đang bị tấn công.", stats.Hostname, stats.Connections)
+		msg := fmt.Sprintf("⚠️ [DDoS ALERT] VPS: %s\nDetected %d TCP connections! Possible attack.", stats.Hostname, stats.Connections)
 		go sendTelegram(msg)
 		lastDdosAlert = time.Now()
 	}
@@ -131,7 +128,7 @@ func getStats() SystemStats {
 func getLogs() (string, string) {
 	logPath := "/var/log/syslog"
 	if runtime.GOOS == "windows" {
-		return "Trình xem log real-time chỉ hỗ trợ Linux.\nWaiting for data...", "Windows Simulation"
+		return "Log viewer only supports Linux.", "Windows Simulation"
 	}
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		logPath = "/var/log/messages"
@@ -141,42 +138,62 @@ func getLogs() (string, string) {
 	return string(output), logPath
 }
 
+// Middleware xử lý CORS và Socket.io
+func CorsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	}
+}
+
 func main() {
-	// Load .env nếu file tồn tại (hữu ích cho DEV local)
 	_ = godotenv.Load(".env")
-
-	vFlag := flag.Bool("v", false, "Hiển thị phiên bản")
+	vFlag := flag.Bool("v", false, "Version")
 	flag.Parse()
-
 	if *vFlag {
 		fmt.Printf("VPS Dashboard Version: %s\n", Version)
 		return
 	}
 
 	r := gin.Default()
-	server := socketio.NewServer(nil)
+	r.Use(CorsMiddleware())
+
+	// Cấu hình Socket.io với đầy đủ transports và CORS
+	server := socketio.NewServer(&engineio.Options{
+		Transports: []transport.Transport{
+			&polling.Transport{},
+			&websocket.Transport{
+				CheckOrigin: func(r *http.Request) bool {
+					return true
+				},
+			},
+		},
+	})
 
 	server.OnConnect("/", func(s socketio.Conn) error {
 		s.SetContext("")
+		log.Println("connected:", s.ID())
 		return nil
 	})
 
 	server.OnError("/", func(s socketio.Conn, e error) {
-		log.Println("meet error:", e)
+		log.Println("socketio error:", e)
 	})
 
-	// Background loop to push stats and logs
 	go func() {
 		for {
 			stats := getStats()
 			server.BroadcastToNamespace("/", "stats", stats)
-
 			logs, path := getLogs()
-			server.BroadcastToNamespace("/", "logs", gin.H{
-				"logs": logs,
-				"path": path,
-			})
-
+			server.BroadcastToNamespace("/", "logs", gin.H{"logs": logs, "path": path})
 			time.Sleep(1 * time.Second)
 		}
 	}()
@@ -187,10 +204,7 @@ func main() {
 	r.GET("/socket.io/*any", gin.WrapH(server))
 	r.POST("/socket.io/*any", gin.WrapH(server))
 
-	r.GET("/api/stats", func(c *gin.Context) {
-		c.JSON(200, getStats())
-	})
-
+	r.GET("/api/stats", func(c *gin.Context) { c.JSON(200, getStats()) })
 	r.GET("/api/logs", func(c *gin.Context) {
 		logs, path := getLogs()
 		c.JSON(200, gin.H{"logs": logs, "path": path})
@@ -203,52 +217,29 @@ func main() {
 			c.JSON(404, gin.H{"error": "API route not found"})
 			return
 		}
-
-		// Xử lý static files từ embedded FS
 		trimPath := strings.TrimPrefix(path, "/")
 		if trimPath == "" || trimPath == "/" {
 			trimPath = "index.html"
 		}
-
-		// Thử mở file
 		data, err := fs.ReadFile(publicFS, trimPath)
 		if err != nil {
-			// Nếu không thấy file, trả về index.html cho SPA
-			data, err = fs.ReadFile(publicFS, "index.html")
-			if err != nil {
-				c.String(404, "Not Found")
-				return
-			}
+			data, _ = fs.ReadFile(publicFS, "index.html")
 			trimPath = "index.html"
 		}
-
-		// Xác định Content-Type đơn giản
 		contentType := "text/plain"
 		switch {
-		case strings.HasSuffix(trimPath, ".html"):
-			contentType = "text/html"
-		case strings.HasSuffix(trimPath, ".js"):
-			contentType = "application/javascript"
-		case strings.HasSuffix(trimPath, ".css"):
-			contentType = "text/css"
-		case strings.HasSuffix(trimPath, ".svg"):
-			contentType = "image/svg+xml"
-		case strings.HasSuffix(trimPath, ".png"):
-			contentType = "image/png"
-		case strings.HasSuffix(trimPath, ".jpg") || strings.HasSuffix(trimPath, ".jpeg"):
-			contentType = "image/jpeg"
-		case strings.HasSuffix(trimPath, ".ico"):
-			contentType = "image/x-icon"
+		case strings.HasSuffix(trimPath, ".html"): contentType = "text/html"
+		case strings.HasSuffix(trimPath, ".js"): contentType = "application/javascript"
+		case strings.HasSuffix(trimPath, ".css"): contentType = "text/css"
+		case strings.HasSuffix(trimPath, ".svg"): contentType = "image/svg+xml"
+		case strings.HasSuffix(trimPath, ".png"): contentType = "image/png"
+		case strings.HasSuffix(trimPath, ".ico"): contentType = "image/x-icon"
 		}
-
 		c.Data(200, contentType, data)
 	})
 
 	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8900"
-	}
-
-	log.Printf("🚀 AcmaDash %s (với cảnh báo Telegram) đang chạy tại :%s\n", Version, port)
+	if port == "" { port = "8900" }
+	log.Printf("🚀 AcmaDash %s running on :%s\n", Version, port)
 	r.Run(":" + port)
 }
