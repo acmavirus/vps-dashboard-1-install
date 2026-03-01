@@ -2,8 +2,10 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -15,11 +17,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	socketio "github.com/googollee/go-socket.io"
-	"github.com/googollee/go-socket.io/engineio"
-	"github.com/googollee/go-socket.io/engineio/transport"
-	"github.com/googollee/go-socket.io/engineio/transport/polling"
-	"github.com/googollee/go-socket.io/engineio/transport/websocket"
 	"github.com/joho/godotenv"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
@@ -28,7 +25,7 @@ import (
 	"github.com/shirou/gopsutil/v4/net"
 )
 
-var Version = "v1.0.1"
+var Version = "v1.0.2"
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
@@ -65,15 +62,10 @@ func sendTelegram(message string) {
 		return
 	}
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
-	resp, err := http.PostForm(apiURL, url.Values{
+	_, _ = http.PostForm(apiURL, url.Values{
 		"chat_id": {chatID},
 		"text":    {message},
 	})
-	if err != nil {
-		log.Printf("[ERROR] Telegram alert failed: %v", err)
-		return
-	}
-	defer resp.Body.Close()
 }
 
 func getStats() SystemStats {
@@ -95,29 +87,29 @@ func getStats() SystemStats {
 		RAM:         vm.UsedPercent,
 		RAMTotal:    vm.Total,
 		RAMUsed:     vm.Used,
-		Disk:        d.UsedPercent,
-		DiskTotal:   d.Total,
-		DiskUsed:    d.Used,
-		Uptime:      h.Uptime,
-		Hostname:    h.Hostname,
-		OS:          runtime.GOOS,
-		Platform:    h.Platform,
-		Kernel:      h.KernelVersion,
-		NetSent:     netSent,
-		NetRecv:     netRecv,
+		Disk:      d.UsedPercent,
+		DiskTotal: d.Total,
+		DiskUsed:  d.Used,
+		Uptime:    h.Uptime,
+		Hostname:  h.Hostname,
+		OS:        runtime.GOOS,
+		Platform:  h.Platform,
+		Kernel:    h.KernelVersion,
+		NetSent:   netSent,
+		NetRecv:   netRecv,
 		Connections: len(c),
 		Timestamp:   time.Now().Unix(),
 		Version:     Version,
 	}
 
 	if stats.CPU > 90.0 && time.Since(lastCpuAlert) > 5*time.Minute {
-		msg := fmt.Sprintf("🚨 [CPU ALERT] VPS: %s\nLoad is too high: %.1f%%", stats.Hostname, stats.CPU)
+		msg := fmt.Sprintf("🚨 [CPU ALERT] VPS: %s\nLoad: %.1f%%", stats.Hostname, stats.CPU)
 		go sendTelegram(msg)
 		lastCpuAlert = time.Now()
 	}
 
-	if stats.Connections > 1500 && time.Since(lastDdosAlert) > 10*time.Minute {
-		msg := fmt.Sprintf("⚠️ [DDoS ALERT] VPS: %s\nDetected %d TCP connections! Possible attack.", stats.Hostname, stats.Connections)
+	if stats.Connections > 2000 && time.Since(lastDdosAlert) > 10*time.Minute {
+		msg := fmt.Sprintf("⚠️ [DDoS ALERT] VPS: %s\nConnections: %d", stats.Hostname, stats.Connections)
 		go sendTelegram(msg)
 		lastDdosAlert = time.Now()
 	}
@@ -128,7 +120,7 @@ func getStats() SystemStats {
 func getLogs() (string, string) {
 	logPath := "/var/log/syslog"
 	if runtime.GOOS == "windows" {
-		return "Log viewer only supports Linux.", "Windows Simulation"
+		return "Log viewer only supports Linux.", "Windows Demo"
 	}
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		logPath = "/var/log/messages"
@@ -138,83 +130,62 @@ func getLogs() (string, string) {
 	return string(output), logPath
 }
 
-// Middleware xử lý CORS và Socket.io
-func CorsMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-		c.Next()
-	}
-}
-
 func main() {
 	_ = godotenv.Load(".env")
 	vFlag := flag.Bool("v", false, "Version")
 	flag.Parse()
 	if *vFlag {
-		fmt.Printf("VPS Dashboard Version: %s\n", Version)
+		fmt.Printf("Version: %s\n", Version)
 		return
 	}
 
+	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
-	r.Use(CorsMiddleware())
 
-	// Cấu hình Socket.io với đầy đủ transports và CORS
-	server := socketio.NewServer(&engineio.Options{
-		Transports: []transport.Transport{
-			&polling.Transport{},
-			&websocket.Transport{
-				CheckOrigin: func(r *http.Request) bool {
-					return true
-				},
-			},
-		},
+	// 1. API - Standard
+	r.GET("/api/stats", func(c *gin.Context) {
+		c.JSON(200, getStats())
 	})
 
-	server.OnConnect("/", func(s socketio.Conn) error {
-		s.SetContext("")
-		log.Println("connected:", s.ID())
-		return nil
-	})
-
-	server.OnError("/", func(s socketio.Conn, e error) {
-		log.Println("socketio error:", e)
-	})
-
-	go func() {
-		for {
-			stats := getStats()
-			server.BroadcastToNamespace("/", "stats", stats)
-			logs, path := getLogs()
-			server.BroadcastToNamespace("/", "logs", gin.H{"logs": logs, "path": path})
-			time.Sleep(1 * time.Second)
-		}
-	}()
-
-	go server.Serve()
-	defer server.Close()
-
-	r.GET("/socket.io/*any", gin.WrapH(server))
-	r.POST("/socket.io/*any", gin.WrapH(server))
-
-	r.GET("/api/stats", func(c *gin.Context) { c.JSON(200, getStats()) })
 	r.GET("/api/logs", func(c *gin.Context) {
 		logs, path := getLogs()
 		c.JSON(200, gin.H{"logs": logs, "path": path})
 	})
 
+	// 2. API - Live Streaming (SSE)
+	r.GET("/api/stream", func(c *gin.Context) {
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		c.Stream(func(w io.Writer) bool {
+			select {
+			case <-ticker.C:
+				stats := getStats()
+				logs, path := getLogs()
+				data, _ := json.Marshal(gin.H{
+					"stats": stats,
+					"logs":  logs,
+					"path":  path,
+				})
+				c.SSEvent("message", string(data))
+				return true
+			case <-c.Request.Context().Done():
+				return false
+			}
+		})
+	})
+
+	// 3. Static Files
 	publicFS, _ := fs.Sub(frontendFS, "frontend/dist")
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if strings.HasPrefix(path, "/api") {
-			c.JSON(404, gin.H{"error": "API route not found"})
+			c.JSON(404, gin.H{"error": "Not Found"})
 			return
 		}
 		trimPath := strings.TrimPrefix(path, "/")
@@ -232,8 +203,6 @@ func main() {
 		case strings.HasSuffix(trimPath, ".js"): contentType = "application/javascript"
 		case strings.HasSuffix(trimPath, ".css"): contentType = "text/css"
 		case strings.HasSuffix(trimPath, ".svg"): contentType = "image/svg+xml"
-		case strings.HasSuffix(trimPath, ".png"): contentType = "image/png"
-		case strings.HasSuffix(trimPath, ".ico"): contentType = "image/x-icon"
 		}
 		c.Data(200, contentType, data)
 	})
