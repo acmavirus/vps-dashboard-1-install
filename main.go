@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	socketio "github.com/googollee/go-socket.io"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
@@ -40,74 +41,106 @@ type SystemStats struct {
 	Timestamp    int64   `json:"timestamp"`
 }
 
+func getStats() SystemStats {
+	vm, _ := mem.VirtualMemory()
+	cpuPercent, _ := cpu.Percent(0, false)
+	d, _ := disk.Usage("/")
+	h, _ := host.Info()
+	n, _ := net.IOCounters(false)
+
+	var netSent, netRecv uint64
+	if len(n) > 0 {
+		netSent = n[0].BytesSent
+		netRecv = n[0].BytesRecv
+	}
+
+	return SystemStats{
+		CPU:       cpuPercent[0],
+		RAM:       vm.UsedPercent,
+		RAMTotal:  vm.Total,
+		RAMUsed:   vm.Used,
+		Disk:      d.UsedPercent,
+		DiskTotal: d.Total,
+		DiskUsed:  d.Used,
+		Uptime:    h.Uptime,
+		Hostname:  h.Hostname,
+		OS:        runtime.GOOS,
+		Platform:  h.Platform,
+		Kernel:    h.KernelVersion,
+		NetSent:   netSent,
+		NetRecv:   netRecv,
+		Timestamp: time.Now().Unix(),
+	}
+}
+
+func getLogs() (string, string) {
+	logPath := "/var/log/syslog"
+	if runtime.GOOS == "windows" {
+		return "Trình xem log real-time chỉ hỗ trợ Linux.\nĐạt trạng thái: " + time.Now().Format("15:04:05") + " - Waiting for data...", "Windows Simulation"
+	}
+
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		logPath = "/var/log/messages"
+	}
+
+	cmd := exec.Command("tail", "-n", "30", logPath)
+	output, _ := cmd.CombinedOutput()
+	return string(output), logPath
+}
+
 func main() {
 	r := gin.Default()
 
-	// 1. API Stats
-	r.GET("/api/stats", func(c *gin.Context) {
-		vm, _ := mem.VirtualMemory()
-		cpuPercent, _ := cpu.Percent(0, false)
-		d, _ := disk.Usage("/")
-		h, _ := host.Info()
-		n, _ := net.IOCounters(false)
+	// Socket.io setup
+	server := socketio.NewServer(nil)
 
-		var netSent, netRecv uint64
-		if len(n) > 0 {
-			netSent = n[0].BytesSent
-			netRecv = n[0].BytesRecv
-		}
-
-		c.JSON(200, SystemStats{
-			CPU:       cpuPercent[0],
-			RAM:       vm.UsedPercent,
-			RAMTotal:  vm.Total,
-			RAMUsed:   vm.Used,
-			Disk:      d.UsedPercent,
-			DiskTotal: d.Total,
-			DiskUsed:  d.Used,
-			Uptime:    h.Uptime,
-			Hostname:  h.Hostname,
-			OS:        runtime.GOOS,
-			Platform:  h.Platform,
-			Kernel:    h.KernelVersion,
-			NetSent:   netSent,
-			NetRecv:   netRecv,
-			Timestamp: time.Now().Unix(),
-		})
+	server.OnConnect("/", func(s socketio.Conn) error {
+		s.SetContext("")
+		log.Println("connected:", s.ID())
+		return nil
 	})
 
-	// 2. API Logs
-	r.GET("/api/logs", func(c *gin.Context) {
-		// Mặc định đọc syslog (dành cho Linux)
-		logPath := "/var/log/syslog"
-		if runtime.GOOS == "windows" {
-			// Trên Windows, trả về thông báo giả lập cho test
-			c.JSON(200, gin.H{
-				"logs": "Hệ điều hành Windows: Chức năng xem log server thật sự chỉ áp dụng cho Linux.\nĐây là log giả lập để kiểm tra UI.",
+	server.OnError("/", func(s socketio.Conn, e error) {
+		log.Println("meet error:", e)
+	})
+
+	server.OnDisconnect("/", func(s socketio.Conn, reason string) {
+		log.Println("closed", reason)
+	})
+
+	// Background loop to push stats and logs
+	go func() {
+		for {
+			stats := getStats()
+			server.BroadcastToNamespace("/", "stats", stats)
+
+			logs, path := getLogs()
+			server.BroadcastToNamespace("/", "logs", gin.H{
+				"logs": logs,
+				"path": path,
 			})
-			return
-		}
 
-		// Kiểm tra file log tồn tại (Ubuntu/Debian mặ định dùng syslog)
-		if _, err := os.Stat(logPath); os.IsNotExist(err) {
-			logPath = "/var/log/messages" // CentOS/RedHat
+			time.Sleep(1 * time.Second) // Cập nhật mỗi 1 giây cho "Live" thật sự
 		}
+	}()
 
-		// Lấy 100 dòng cuối bằng lệnh tail
-		cmd := exec.Command("tail", "-n", "100", logPath)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			c.JSON(500, gin.H{"error": "Không thể đọc log: " + err.Error()})
-			return
-		}
+	go server.Serve()
+	defer server.Close()
 
-		c.JSON(200, gin.H{
-			"logs": string(output),
-			"path": logPath,
-		})
+	// 1. HTTP Routes (Duy trì cho fallback hoặc legacy)
+	r.GET("/socket.io/*any", gin.WrapH(server))
+	r.POST("/socket.io/*any", gin.WrapH(server))
+
+	r.GET("/api/stats", func(c *gin.Context) {
+		c.JSON(200, getStats())
 	})
 
-	// 3. Serve Frontend
+	r.GET("/api/logs", func(c *gin.Context) {
+		logs, path := getLogs()
+		c.JSON(200, gin.H{"logs": logs, "path": path})
+	})
+
+	// 2. Serve Frontend
 	publicFS, _ := fs.Sub(frontendFS, "frontend/dist")
 
 	r.NoRoute(func(c *gin.Context) {
@@ -117,7 +150,6 @@ func main() {
 			return
 		}
 
-		// Thử tìm file trong FS
 		f, err := publicFS.Open(strings.TrimPrefix(path, "/"))
 		if err == nil {
 			f.Close()
@@ -125,10 +157,9 @@ func main() {
 			return
 		}
 
-		// Fallback về index.html (cho SPA routing)
 		c.FileFromFS("index.html", http.FS(publicFS))
 	})
 
-	log.Println("Dashboard đang chạy tại http://localhost:8900")
+	log.Println("Dashboard LIVE đang chạy tại http://localhost:8900")
 	r.Run(":8900")
 }

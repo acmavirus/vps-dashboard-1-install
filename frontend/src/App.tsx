@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { io } from 'socket.io-client';
 import {
     Activity,
     Cpu,
@@ -48,6 +49,7 @@ const App: React.FC = () => {
     const [logs, setLogs] = useState<string>('');
     const [logPath, setLogPath] = useState<string>('');
     const [activeTab, setActiveTab] = useState<'stats' | 'logs'>('stats');
+    const [connected, setConnected] = useState(false);
 
     const formatBytes = (bytes: number) => {
         if (!bytes) return '0 GB';
@@ -61,12 +63,22 @@ const App: React.FC = () => {
         return `${d}d ${h}h ${m}m`;
     };
 
-    const fetchStats = async () => {
-        try {
-            const res = await axios.get('/api/stats');
-            const newStat = res.data;
-            setStats(newStat);
+    useEffect(() => {
+        // Socket.io for LIVE stats and logs
+        const socket = io({ transports: ['websocket'] });
 
+        socket.on('connect', () => {
+            setConnected(true);
+            console.log('Socket.io connected');
+        });
+
+        socket.on('disconnect', () => {
+            setConnected(false);
+            console.log('Socket.io disconnected');
+        });
+
+        socket.on('stats', (newStat: Stats) => {
+            setStats(newStat);
             const now = new Date();
             const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
@@ -75,38 +87,34 @@ const App: React.FC = () => {
                 if (updated.length > 20) return updated.slice(1);
                 return updated;
             });
-        } catch (error) {
-            console.error("Lỗi lấy thông số:", error);
-        }
-    };
+        });
 
-    const fetchLogs = async () => {
-        try {
-            const res = await axios.get('/api/logs');
-            setLogs(res.data.logs);
-            setLogPath(res.data.path || 'System Log');
-        } catch (error) {
-            console.error("Lỗi lấy log:", error);
-            setLogs("Không thể kết nối tới server để lấy log.");
-        }
-    };
+        socket.on('logs', (data: { logs: string, path: string }) => {
+            setLogs(data.logs);
+            setLogPath(data.path);
+        });
 
-    useEffect(() => {
-        fetchStats();
-        const interval = setInterval(fetchStats, 3000);
-        return () => clearInterval(interval);
+        // Fallback or Initial fetch
+        const fetchInitial = async () => {
+            try {
+                const res = await axios.get('/api/stats');
+                setStats(res.data);
+                const lres = await axios.get('/api/logs');
+                setLogs(lres.data.logs);
+                setLogPath(lres.data.path);
+            } catch (e) {
+                console.error('Initial fetch error', e);
+            }
+        };
+        fetchInitial();
+
+        return () => {
+            socket.disconnect();
+        };
     }, []);
 
-    useEffect(() => {
-        if (activeTab === 'logs') {
-            fetchLogs();
-            const logInterval = setInterval(fetchLogs, 5000);
-            return () => clearInterval(logInterval);
-        }
-    }, [activeTab]);
-
     return (
-        <div className="min-h-screen bg-[#020617] text-slate-200 p-4 md:p-8 font-sans selection:bg-blue-500/30">
+        <div className="min-h-screen bg-[#020617] text-slate-200 p-4 md:p-8 font-sans selection:bg-blue-500/30 overflow-x-hidden">
             {/* Background Decorative Elements */}
             <div className="fixed top-0 left-0 w-full h-full overflow-hidden pointer-events-none -z-10">
                 <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-600/10 blur-[120px] rounded-full"></div>
@@ -124,7 +132,10 @@ const App: React.FC = () => {
                             Acma<span className="text-blue-500 italic not-italic">Dash</span>
                         </h1>
                         <p className="text-xs text-slate-400 flex items-center gap-1 font-medium">
-                            <ShieldCheck size={14} className="text-emerald-500" /> SYSTEM STATUS: <span className="text-emerald-400">OPERATIONAL</span>
+                            <ShieldCheck size={14} className={connected ? "text-emerald-500" : "text-red-500"} />
+                            SYSTEM STATUS: <span className={connected ? "text-emerald-400" : "text-red-400"}>
+                                {connected ? "LIVE_OPERATIONAL" : "RECONNECTING..."}
+                            </span>
                         </p>
                     </div>
                 </div>
@@ -146,7 +157,7 @@ const App: React.FC = () => {
 
                 <div className="flex gap-4">
                     <div className="px-5 py-2.5 bg-slate-800/30 rounded-xl border border-slate-700/30 backdrop-blur-md flex items-center gap-3">
-                        <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                        <div className={`w-2 h-2 rounded-full ${connected ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`}></div>
                         <span className="text-xs font-bold tracking-widest text-slate-300 uppercase">
                             {stats ? formatUptime(stats.uptime) : 'LOADING...'}
                         </span>
@@ -212,7 +223,7 @@ const App: React.FC = () => {
                                 </div>
                                 <div className="mt-8 w-full bg-slate-800/50 h-2 rounded-full overflow-hidden p-[2px]">
                                     <div
-                                        className={`h-full rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(59,130,246,0.5)] ${stats && stats.cpu > 80 ? 'bg-gradient-to-r from-red-500 to-orange-500' : 'bg-gradient-to-r from-blue-500 to-cyan-400'}`}
+                                        className={`h-full rounded-full transition-all duration-500 ease-out shadow-[0_0_15px_rgba(59,130,246,0.5)] ${stats && stats.cpu > 80 ? 'bg-gradient-to-r from-red-500 to-orange-500' : 'bg-gradient-to-r from-blue-500 to-cyan-400'}`}
                                         style={{ width: `${stats ? stats.cpu : 0}%` }}
                                     ></div>
                                 </div>
@@ -236,7 +247,7 @@ const App: React.FC = () => {
                                 </div>
                                 <div className="mt-8 w-full bg-slate-800/50 h-2 rounded-full overflow-hidden p-[2px]">
                                     <div
-                                        className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(16,185,129,0.5)]"
+                                        className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500 ease-out shadow-[0_0_15px_rgba(16,185,129,0.5)]"
                                         style={{ width: `${stats ? stats.ram : 0}%` }}
                                     ></div>
                                 </div>
@@ -260,7 +271,7 @@ const App: React.FC = () => {
                                 </div>
                                 <div className="mt-8 w-full bg-slate-800/50 h-2 rounded-full overflow-hidden p-[2px]">
                                     <div
-                                        className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(245,158,11,0.5)]"
+                                        className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full transition-all duration-500 ease-out shadow-[0_0_15px_rgba(245,158,11,0.5)]"
                                         style={{ width: `${stats ? stats.disk : 0}%` }}
                                     ></div>
                                 </div>
@@ -276,11 +287,11 @@ const App: React.FC = () => {
                                     </div>
                                     <div>
                                         <h2 className="text-lg font-black uppercase tracking-widest text-white italic">Real-time Performance</h2>
-                                        <p className="text-[10px] text-slate-500 font-bold uppercase">CPU load percentage visualization</p>
+                                        <p className="text-[10px] text-slate-500 font-bold uppercase">CPU load percentage visualization (LIVE)</p>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-4 text-[10px] font-black tracking-widest text-blue-500 bg-blue-500/5 px-4 py-2 rounded-full border border-blue-500/10">
-                                    <RefreshCcw size={12} className="animate-spin" /> LIVE_SYNC
+                                    <RefreshCcw size={12} className="animate-spin" /> SOCKET_STREAM
                                 </div>
                             </div>
 
@@ -323,7 +334,7 @@ const App: React.FC = () => {
                                             strokeWidth={4}
                                             fillOpacity={1}
                                             fill="url(#colorCpu)"
-                                            animationDuration={1000}
+                                            animationDuration={500}
                                         />
                                     </AreaChart>
                                 </ResponsiveContainer>
@@ -349,7 +360,7 @@ const App: React.FC = () => {
                                 </div>
                                 <div className="flex items-center gap-3">
                                     <div className="text-[10px] font-bold text-emerald-500/80 bg-emerald-500/5 px-3 py-1 rounded-md border border-emerald-500/10">
-                                        CONNECTED
+                                        {connected ? "STOCKED_CONNECTED" : "WAITING..."}
                                     </div>
                                 </div>
                             </div>
@@ -357,14 +368,14 @@ const App: React.FC = () => {
                             {/* Terminal Content */}
                             <div className="p-8 h-[600px] overflow-y-auto font-mono text-sm group scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
                                 <pre className="text-slate-400 whitespace-pre-wrap leading-relaxed selection:bg-blue-500/40">
-                                    {logs || 'Waiting for system logs output...'}
+                                    {logs || 'Waiting for system logs output (Socket.io streaming)...'}
                                 </pre>
                             </div>
 
                             {/* Terminal Footer */}
                             <div className="bg-slate-900/50 px-6 py-3 border-t border-slate-800 flex items-center justify-between">
                                 <span className="text-[9px] font-bold text-slate-600 uppercase tracking-widest">
-                                    Last 100 lines - Auto-refreshing every 5s
+                                    Live Stream Output - Latency: ~100ms
                                 </span>
                                 <Info size={14} className="text-slate-700" />
                             </div>
@@ -382,11 +393,11 @@ const App: React.FC = () => {
                     <div className="border-l border-slate-800 h-8"></div>
                     <div className="flex flex-col items-center">
                         <span className="text-[10px] font-black text-slate-600 uppercase tracking-[0.3em] mb-2">Engine</span>
-                        <span className="text-sm font-black text-white italic">Go + Gin + React</span>
+                        <span className="text-sm font-black text-white italic">Socket.io + Go + Gin</span>
                     </div>
                 </div>
                 <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest">
-                    &copy; 2024 Premium VPS Ecosystem | All Rights Reserved
+                    &copy; 2024 Premium LIVE Ecosystem | All Rights Reserved
                 </p>
             </footer>
         </div>
