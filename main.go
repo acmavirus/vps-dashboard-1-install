@@ -206,27 +206,42 @@ func main() {
 
 		// Xử lý static files từ embedded FS
 		trimPath := strings.TrimPrefix(path, "/")
-		if trimPath == "" {
-			c.FileFromFS("index.html", http.FS(publicFS))
-			return
+		if trimPath == "" || trimPath == "/" {
+			trimPath = "index.html"
 		}
 
-		f, err := publicFS.Open(trimPath)
+		// Thử mở file
+		data, err := fs.ReadFile(publicFS, trimPath)
 		if err != nil {
-			// File không tồn tại -> Serve index.html cho SPA Routing
-			c.FileFromFS("index.html", http.FS(publicFS))
-			return
+			// Nếu không thấy file, trả về index.html cho SPA
+			data, err = fs.ReadFile(publicFS, "index.html")
+			if err != nil {
+				c.String(404, "Not Found")
+				return
+			}
+			trimPath = "index.html"
 		}
 
-		// Kiểm tra xem có phải là thư mục không (để tránh redirect loop)
-		stat, err := f.Stat()
-		f.Close()
-		if err == nil && stat.IsDir() {
-			c.FileFromFS("index.html", http.FS(publicFS))
-			return
+		// Xác định Content-Type đơn giản
+		contentType := "text/plain"
+		switch {
+		case strings.HasSuffix(trimPath, ".html"):
+			contentType = "text/html"
+		case strings.HasSuffix(trimPath, ".js"):
+			contentType = "application/javascript"
+		case strings.HasSuffix(trimPath, ".css"):
+			contentType = "text/css"
+		case strings.HasSuffix(trimPath, ".svg"):
+			contentType = "image/svg+xml"
+		case strings.HasSuffix(trimPath, ".png"):
+			contentType = "image/png"
+		case strings.HasSuffix(trimPath, ".jpg") || strings.HasSuffix(trimPath, ".jpeg"):
+			contentType = "image/jpeg"
+		case strings.HasSuffix(trimPath, ".ico"):
+			contentType = "image/x-icon"
 		}
 
-		c.FileFromFS(trimPath, http.FS(publicFS))
+		c.Data(200, contentType, data)
 	})
 
 	port := os.Getenv("PORT")
