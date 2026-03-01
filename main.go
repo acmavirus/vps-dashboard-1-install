@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	socketio "github.com/googollee/go-socket.io"
+	"github.com/joho/godotenv"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
@@ -22,11 +24,16 @@ import (
 	"github.com/shirou/gopsutil/v4/net"
 )
 
-// Phiên bản ứng dụng (Sẽ được cập nhật khi build release)
-var Version = "v1.0.0"
+var Version = "v1.0.1"
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
+
+// Cooldown timer: 5 phút để tránh spam thông báo liên tục
+var (
+	lastCpuAlert  time.Time
+	lastDdosAlert time.Time
+)
 
 type SystemStats struct {
 	CPU          float64 `json:"cpu"`
@@ -43,8 +50,31 @@ type SystemStats struct {
 	Kernel       string  `json:"kernel"`
 	NetSent      uint64  `json:"net_sent"`
 	NetRecv      uint64  `json:"net_recv"`
+	Connections  int     `json:"connections"` // Số lượng kết nối mạng
 	Timestamp    int64   `json:"timestamp"`
 	Version      string  `json:"version"`
+}
+
+func sendTelegram(message string) {
+	token := os.Getenv("TELEGRAM_BOT_TOKEN")
+	chatID := os.Getenv("TELEGRAM_CHAT_ID")
+
+	if token == "" || chatID == "" {
+		return
+	}
+
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
+	resp, err := http.PostForm(apiURL, url.Values{
+		"chat_id": {chatID},
+		"text":    {message},
+	})
+
+	if err != nil {
+		log.Printf("[ERROR] Cảnh báo Telegram thất bại: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	log.Printf("[SUCCESS] Đã gửi cảnh báo Telegram: %s", message)
 }
 
 func getStats() SystemStats {
@@ -53,6 +83,7 @@ func getStats() SystemStats {
 	d, _ := disk.Usage("/")
 	h, _ := host.Info()
 	n, _ := net.IOCounters(false)
+	c, _ := net.Connections("tcp") // Có thể chậm nếu có quá nhiều kết nối
 
 	var netSent, netRecv uint64
 	if len(n) > 0 {
@@ -60,42 +91,60 @@ func getStats() SystemStats {
 		netRecv = n[0].BytesRecv
 	}
 
-	return SystemStats{
-		CPU:       cpuPercent[0],
-		RAM:       vm.UsedPercent,
-		RAMTotal:  vm.Total,
-		RAMUsed:   vm.Used,
-		Disk:      d.UsedPercent,
-		DiskTotal: d.Total,
-		DiskUsed:  d.Used,
-		Uptime:    h.Uptime,
-		Hostname:  h.Hostname,
-		OS:        runtime.GOOS,
-		Platform:  h.Platform,
-		Kernel:    h.KernelVersion,
-		NetSent:   netSent,
-		NetRecv:   netRecv,
-		Timestamp: time.Now().Unix(),
-		Version:   Version,
+	stats := SystemStats{
+		CPU:         cpuPercent[0],
+		RAM:         vm.UsedPercent,
+		RAMTotal:    vm.Total,
+		RAMUsed:     vm.Used,
+		Disk:        d.UsedPercent,
+		DiskTotal:   d.Total,
+		DiskUsed:    d.Used,
+		Uptime:      h.Uptime,
+		Hostname:    h.Hostname,
+		OS:          runtime.GOOS,
+		Platform:    h.Platform,
+		Kernel:      h.KernelVersion,
+		NetSent:     netSent,
+		NetRecv:     netRecv,
+		Connections: len(c),
+		Timestamp:   time.Now().Unix(),
+		Version:     Version,
 	}
+
+	// 1. Kiểm tra cảnh báo CPU > 90%
+	if stats.CPU > 90.0 && time.Since(lastCpuAlert) > 5*time.Minute {
+		msg := fmt.Sprintf("🚨 [CẢNH BÁO CPU] VPS: %s\nCPU đang nhảy tải quá cao: %.1f%%", stats.Hostname, stats.CPU)
+		go sendTelegram(msg)
+		lastCpuAlert = time.Now()
+	}
+
+	// 2. Kiểm tra DDoS (Nếu số lượng kết nối TCP vượt quá 1500)
+	if stats.Connections > 1500 && time.Since(lastDdosAlert) > 10*time.Minute {
+		msg := fmt.Sprintf("⚠️ [CẢNH BÁO DDoS] VPS: %s\nPhát hiện %d kết nối TCP đang hoạt động! Có thể hệ thống đang bị tấn công.", stats.Hostname, stats.Connections)
+		go sendTelegram(msg)
+		lastDdosAlert = time.Now()
+	}
+
+	return stats
 }
 
 func getLogs() (string, string) {
 	logPath := "/var/log/syslog"
 	if runtime.GOOS == "windows" {
-		return "Trình xem log real-time chỉ hỗ trợ Linux.\nĐạt trạng thái: " + time.Now().Format("15:04:05") + " - Waiting for data...", "Windows Simulation"
+		return "Trình xem log real-time chỉ hỗ trợ Linux.\nWaiting for data...", "Windows Simulation"
 	}
-
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		logPath = "/var/log/messages"
 	}
-
 	cmd := exec.Command("tail", "-n", "30", logPath)
 	output, _ := cmd.CombinedOutput()
 	return string(output), logPath
 }
 
 func main() {
+	// Load .env nếu file tồn tại (hữu ích cho DEV local)
+	_ = godotenv.Load(".env")
+
 	vFlag := flag.Bool("v", false, "Hiển thị phiên bản")
 	flag.Parse()
 
@@ -105,8 +154,6 @@ func main() {
 	}
 
 	r := gin.Default()
-
-	// Socket.io setup
 	server := socketio.NewServer(nil)
 
 	server.OnConnect("/", func(s socketio.Conn) error {
@@ -137,7 +184,6 @@ func main() {
 	go server.Serve()
 	defer server.Close()
 
-	// 1. HTTP Routes
 	r.GET("/socket.io/*any", gin.WrapH(server))
 	r.POST("/socket.io/*any", gin.WrapH(server))
 
@@ -150,26 +196,27 @@ func main() {
 		c.JSON(200, gin.H{"logs": logs, "path": path})
 	})
 
-	// 2. Serve Frontend
 	publicFS, _ := fs.Sub(frontendFS, "frontend/dist")
-
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if strings.HasPrefix(path, "/api") {
 			c.JSON(404, gin.H{"error": "API route not found"})
 			return
 		}
-
 		f, err := publicFS.Open(strings.TrimPrefix(path, "/"))
 		if err == nil {
 			f.Close()
 			c.FileFromFS(path, http.FS(publicFS))
 			return
 		}
-
 		c.FileFromFS("index.html", http.FS(publicFS))
 	})
 
-	log.Printf("AcmaDash %s đang chạy tại http://0.0.0.0:8900\n", Version)
-	r.Run(":8900")
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8900"
+	}
+
+	log.Printf("🚀 AcmaDash %s (với cảnh báo Telegram) đang chạy tại :%s\n", Version, port)
+	r.Run(":" + port)
 }

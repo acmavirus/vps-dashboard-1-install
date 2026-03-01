@@ -14,7 +14,9 @@ import {
     Info,
     Globe,
     Monitor,
-    Hash
+    Hash,
+    Link as LinkIcon,
+    AlertTriangle
 } from 'lucide-react';
 import {
     AreaChart,
@@ -41,6 +43,7 @@ interface Stats {
     kernel: string;
     net_sent: number;
     net_recv: number;
+    connections: number;
 }
 
 const App: React.FC = () => {
@@ -93,20 +96,6 @@ const App: React.FC = () => {
             setLogs(data.logs);
             setLogPath(data.path);
         });
-
-        // Fallback or Initial fetch
-        const fetchInitial = async () => {
-            try {
-                const res = await axios.get('/api/stats');
-                setStats(res.data);
-                const lres = await axios.get('/api/logs');
-                setLogs(lres.data.logs);
-                setLogPath(lres.data.path);
-            } catch (e) {
-                console.error('Initial fetch error', e);
-            }
-        };
-        fetchInitial();
 
         return () => {
             socket.disconnect();
@@ -169,7 +158,7 @@ const App: React.FC = () => {
                 {activeTab === 'stats' && (
                     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
                         {/* Summary Info Bar */}
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                             <div className="bg-slate-900/40 border border-slate-800/50 p-4 rounded-2xl backdrop-blur-md">
                                 <div className="flex items-center gap-3 mb-2">
                                     <Monitor size={16} className="text-blue-400" />
@@ -190,6 +179,16 @@ const App: React.FC = () => {
                                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Kernel</span>
                                 </div>
                                 <div className="text-sm font-bold text-white truncate">{stats?.kernel || '---'}</div>
+                            </div>
+                            <div className="bg-slate-900/40 border border-slate-800/50 p-4 rounded-2xl backdrop-blur-md">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <LinkIcon size={16} className="text-indigo-400" />
+                                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Connections</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <div className="text-sm font-bold text-white truncate">{stats?.connections || 0} TCP</div>
+                                    {stats && stats.connections > 1000 && <AlertTriangle size={14} className="text-red-500 animate-pulse" />}
+                                </div>
                             </div>
                             <div className="bg-slate-900/40 border border-slate-800/50 p-4 rounded-2xl backdrop-blur-md">
                                 <div className="flex items-center gap-3 mb-2">
@@ -223,7 +222,7 @@ const App: React.FC = () => {
                                 </div>
                                 <div className="mt-8 w-full bg-slate-800/50 h-2 rounded-full overflow-hidden p-[2px]">
                                     <div
-                                        className={`h-full rounded-full transition-all duration-500 ease-out shadow-[0_0_15px_rgba(59,130,246,0.5)] ${stats && stats.cpu > 80 ? 'bg-gradient-to-r from-red-500 to-orange-500' : 'bg-gradient-to-r from-blue-500 to-cyan-400'}`}
+                                        className={`h-full rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(59,130,246,0.5)] ${stats && stats.cpu > 80 ? 'bg-gradient-to-r from-red-500 to-orange-500' : 'bg-gradient-to-r from-blue-500 to-cyan-400'}`}
                                         style={{ width: `${stats ? stats.cpu : 0}%` }}
                                     ></div>
                                 </div>
@@ -247,7 +246,7 @@ const App: React.FC = () => {
                                 </div>
                                 <div className="mt-8 w-full bg-slate-800/50 h-2 rounded-full overflow-hidden p-[2px]">
                                     <div
-                                        className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-500 ease-out shadow-[0_0_15px_rgba(16,185,129,0.5)]"
+                                        className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(16,185,129,0.5)]"
                                         style={{ width: `${stats ? stats.ram : 0}%` }}
                                     ></div>
                                 </div>
@@ -271,7 +270,7 @@ const App: React.FC = () => {
                                 </div>
                                 <div className="mt-8 w-full bg-slate-800/50 h-2 rounded-full overflow-hidden p-[2px]">
                                     <div
-                                        className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full transition-all duration-500 ease-out shadow-[0_0_15px_rgba(245,158,11,0.5)]"
+                                        className="h-full bg-gradient-to-r from-amber-500 to-orange-400 rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(245,158,11,0.5)]"
                                         style={{ width: `${stats ? stats.disk : 0}%` }}
                                     ></div>
                                 </div>
