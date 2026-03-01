@@ -1,0 +1,18 @@
+# Binaries
+vps-dash
+vps-dash-*
+
+# Node.js
+frontend/node_modules
+frontend/dist
+.eslintcache
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
