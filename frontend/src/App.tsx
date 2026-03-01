@@ -13,7 +13,9 @@ import {
     Monitor,
     Hash,
     Link as LinkIcon,
-    LayoutDashboard
+    AlertTriangle,
+    LayoutDashboard,
+    FileText
 } from 'lucide-react';
 import {
     AreaChart,
@@ -33,7 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 
-const Version = "1.1.0-Premium";
+const Version = "1.1.1-Premium";
 
 interface Stats {
     cpu: number;
@@ -53,12 +55,23 @@ interface Stats {
     connections: number;
 }
 
+interface LogData {
+    content: string;
+    path: string;
+}
+
+interface AllLogs {
+    system: LogData;
+    nginx_access: LogData;
+    nginx_error: LogData;
+}
+
 const App: React.FC = () => {
     const [stats, setStats] = useState<Stats | null>(null);
     const [history, setHistory] = useState<{ time: string; cpu: number }[]>([]);
-    const [logs, setLogs] = useState<string>('');
-    const [logPath, setLogPath] = useState<string>('');
+    const [logs, setLogs] = useState<AllLogs | null>(null);
     const [connected, setConnected] = useState(false);
+    const [logTab, setLogTab] = useState<'system' | 'nginx_access' | 'nginx_error'>('system');
     const eventSourceRef = useRef<EventSource | null>(null);
 
     const formatBytes = (bytes: number) => {
@@ -74,19 +87,20 @@ const App: React.FC = () => {
     };
 
     const updateUI = (data: any) => {
-        const { stats: newStat, logs: newLogs, path } = data;
-        setStats(newStat);
-        setLogs(newLogs);
-        setLogPath(path);
-
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-        setHistory(prev => {
-            const updated = [...prev, { time: timeStr, cpu: newStat.cpu }];
-            if (updated.length > 30) return updated.slice(1);
-            return updated;
-        });
+        const { stats: newStat, logs: newLogs } = data;
+        if (newStat) {
+            setStats(newStat);
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            setHistory(prev => {
+                const updated = [...prev, { time: timeStr, cpu: newStat.cpu }];
+                if (updated.length > 30) return updated.slice(1);
+                return updated;
+            });
+        }
+        if (newLogs) {
+            setLogs(newLogs);
+        }
     };
 
     const fetchFallback = async () => {
@@ -95,7 +109,7 @@ const App: React.FC = () => {
             const data = await res.json();
             const logRes = await fetch('/api/logs');
             const logData = await logRes.json();
-            updateUI({ stats: data, logs: logData.logs, path: logData.path });
+            updateUI({ stats: data, logs: logData });
         } catch (e) {
             console.error("Fallback error", e);
         }
@@ -123,7 +137,7 @@ const App: React.FC = () => {
         };
         setupSSE();
         fetchFallback();
-        const interval = setInterval(fetchFallback, 3000);
+        const interval = setInterval(fetchFallback, 4000);
         return () => {
             if (eventSourceRef.current) eventSourceRef.current.close();
             clearInterval(interval);
@@ -138,9 +152,7 @@ const App: React.FC = () => {
                 <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-indigo-600/5 blur-[120px] rounded-full animate-pulse"></div>
             </div>
 
-            {/* Sidebar-like layout wrapper */}
             <div className="flex flex-1 overflow-hidden">
-                {/* Desktop Sidebar (Optional, maybe just a compact one) */}
                 <aside className="hidden lg:flex flex-col w-20 bg-slate-900/50 border-r border-slate-800/60 items-center py-8 gap-10">
                     <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20">
                         <Server size={24} className="text-white" />
@@ -189,8 +201,8 @@ const App: React.FC = () => {
                     <Tabs defaultValue="overview" className="space-y-8 animate-in fade-in duration-500">
                         <div className="flex items-center justify-between">
                             <TabsList className="bg-slate-900/50 border border-slate-800 p-1 rounded-xl">
-                                <TabsTrigger value="overview" className="rounded-lg px-6 font-bold text-xs tracking-wider">OVERVIEW</TabsTrigger>
-                                <TabsTrigger value="logs" className="rounded-lg px-6 font-bold text-xs tracking-wider">TERMINAL</TabsTrigger>
+                                <TabsTrigger value="overview" className="rounded-lg px-6 font-bold text-xs tracking-wider uppercase">Overview</TabsTrigger>
+                                <TabsTrigger value="logs" className="rounded-lg px-6 font-bold text-xs tracking-wider uppercase">Terminal Logs</TabsTrigger>
                             </TabsList>
                             <div className="hidden sm:flex items-center gap-2 text-slate-500 text-xs font-bold italic">
                                 <Monitor size={14} /> {stats?.hostname || 'Connecting...'}
@@ -198,7 +210,6 @@ const App: React.FC = () => {
                         </div>
 
                         <TabsContent value="overview" className="space-y-8">
-                            {/* Stats Grid */}
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                                 <Card className="bg-slate-900/40 border-slate-800/60 backdrop-blur-md overflow-hidden relative group hover:border-blue-500/40 transition-all duration-300">
                                     <CardHeader className="pb-2">
@@ -277,9 +288,7 @@ const App: React.FC = () => {
                                 </Card>
                             </div>
 
-                            {/* Main Display Area */}
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                                {/* Performance Chart */}
                                 <Card className="lg:col-span-2 bg-slate-900/30 border-slate-800/60 backdrop-blur-md">
                                     <CardHeader className="flex flex-row items-center justify-between">
                                         <div>
@@ -311,7 +320,6 @@ const App: React.FC = () => {
                                     </CardContent>
                                 </Card>
 
-                                {/* OS Info & Alerts */}
                                 <div className="space-y-6">
                                     <Card className="bg-slate-900/30 border-slate-800/60 backdrop-blur-md">
                                         <CardHeader className="pb-3">
@@ -357,44 +365,76 @@ const App: React.FC = () => {
                             </div>
                         </TabsContent>
 
-                        <TabsContent value="logs">
-                            <Card className="bg-slate-950/80 border-slate-800 backdrop-blur-xl overflow-hidden shadow-2xl">
-                                <CardHeader className="bg-slate-900/80 border-b border-slate-800/60 pb-3 flex flex-row items-center justify-between">
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex gap-1.5">
-                                            <div className="w-2.5 h-2.5 rounded-full bg-red-500/40"></div>
-                                            <div className="w-2.5 h-2.5 rounded-full bg-amber-500/40"></div>
-                                            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/40"></div>
+                        <TabsContent value="logs" className="space-y-6">
+                            <div className="flex flex-col md:flex-row gap-6 h-[700px]">
+                                {/* Log Navigation */}
+                                <Card className="w-full md:w-64 bg-slate-900/30 border-slate-800 backdrop-blur-xl h-fit">
+                                    <CardHeader>
+                                        <CardTitle className="text-[10px] font-black uppercase tracking-widest text-slate-500 italic">Select Stream</CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="p-2 space-y-1">
+                                        <Button
+                                            onClick={() => setLogTab('system')}
+                                            variant={logTab === 'system' ? 'secondary' : 'ghost'}
+                                            className={`w-full justify-start rounded-xl font-bold text-xs uppercase italic tracking-tighter transition-all ${logTab === 'system' ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'text-slate-500'}`}
+                                        >
+                                            <Terminal size={14} className="mr-3" /> System Journal
+                                        </Button>
+                                        <Button
+                                            onClick={() => setLogTab('nginx_access')}
+                                            variant={logTab === 'nginx_access' ? 'secondary' : 'ghost'}
+                                            className={`w-full justify-start rounded-xl font-bold text-xs uppercase italic tracking-tighter transition-all ${logTab === 'nginx_access' ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30' : 'text-slate-500'}`}
+                                        >
+                                            <Globe size={14} className="mr-3" /> Nginx Access
+                                        </Button>
+                                        <Button
+                                            onClick={() => setLogTab('nginx_error')}
+                                            variant={logTab === 'nginx_error' ? 'secondary' : 'ghost'}
+                                            className={`w-full justify-start rounded-xl font-bold text-xs uppercase italic tracking-tighter transition-all ${logTab === 'nginx_error' ? 'bg-red-600/20 text-red-400 border border-red-500/30' : 'text-slate-500'}`}
+                                        >
+                                            <AlertTriangle size={14} className="mr-3 text-red-500" /> Nginx Errors
+                                        </Button>
+                                    </CardContent>
+                                </Card>
+
+                                {/* Terminal Content */}
+                                <Card className="flex-1 bg-slate-950/80 border-slate-800 backdrop-blur-xl overflow-hidden flex flex-col shadow-2xl">
+                                    <CardHeader className="bg-slate-900/80 border-b border-slate-800/60 pb-3 flex flex-row items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <div className="flex gap-1.5">
+                                                <div className="w-2.5 h-2.5 rounded-full bg-red-500/40"></div>
+                                                <div className="w-2.5 h-2.5 rounded-full bg-amber-500/40"></div>
+                                                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/40"></div>
+                                            </div>
+                                            <div className="h-4 w-px bg-slate-800 mx-2"></div>
+                                            <div className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest italic">
+                                                <FileText size={14} /> {logs?.[logTab]?.path || 'Locating stream...'}
+                                            </div>
                                         </div>
-                                        <div className="h-4 w-px bg-slate-800 mx-2"></div>
-                                        <div className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest italic">
-                                            <Terminal size={14} /> {logPath}
+                                        <Badge variant="outline" className="text-[8px] font-black border-blue-500/30 text-blue-500 uppercase px-2">Live Stream Online</Badge>
+                                    </CardHeader>
+                                    <CardContent className="p-0 flex-1 overflow-hidden">
+                                        <ScrollArea className="h-full w-full p-6">
+                                            <pre className="text-slate-400 font-mono text-sm whitespace-pre-wrap leading-relaxed tracking-tight selection:bg-blue-500/20">
+                                                {logs?.[logTab]?.content || 'Initializing log stream buffer...'}
+                                            </pre>
+                                        </ScrollArea>
+                                    </CardContent>
+                                    <Separator className="bg-slate-800/60" />
+                                    <div className="px-6 py-3 flex items-center justify-between bg-slate-900/40 text-slate-600 text-[9px] font-black uppercase tracking-[0.2em] italic">
+                                        <span>Unified Logging Context</span>
+                                        <div className="flex items-center gap-4">
+                                            <span>SSE Payload: Active</span>
+                                            <RefreshCcw size={10} className="animate-spin-slow text-blue-500" />
                                         </div>
                                     </div>
-                                    <Badge variant="outline" className="text-[8px] font-black border-emerald-500/30 text-emerald-500 uppercase px-2">Live Logs Connected</Badge>
-                                </CardHeader>
-                                <CardContent className="p-0">
-                                    <ScrollArea className="h-[600px] w-full p-6">
-                                        <pre className="text-slate-400 font-mono text-sm whitespace-pre-wrap leading-relaxed tracking-tight selection:bg-blue-500/20">
-                                            {logs || 'Waiting for system stream...'}
-                                        </pre>
-                                    </ScrollArea>
-                                </CardContent>
-                                <Separator className="bg-slate-800/60" />
-                                <div className="px-6 py-3 flex items-center justify-between text-slate-600 text-[9px] font-black uppercase tracking-[0.2em] italic">
-                                    <span>Server-Sent Events Pipeline</span>
-                                    <div className="flex items-center gap-4">
-                                        <span>Auto-Sync Active</span>
-                                        <RefreshCcw size={10} className="animate-spin-slow" />
-                                    </div>
-                                </div>
-                            </Card>
+                                </Card>
+                            </div>
                         </TabsContent>
                     </Tabs>
                 </main>
             </div>
 
-            {/* Premium Footer */}
             <footer className="mt-auto px-4 py-8 border-t border-slate-900/80 bg-slate-950/50 backdrop-blur-lg">
                 <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
                     <div className="flex items-center gap-10">

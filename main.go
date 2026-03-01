@@ -25,7 +25,7 @@ import (
 	"github.com/shirou/gopsutil/v4/net"
 )
 
-var Version = "v1.0.2"
+var Version = "v1.1.1"
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
@@ -87,16 +87,16 @@ func getStats() SystemStats {
 		RAM:         vm.UsedPercent,
 		RAMTotal:    vm.Total,
 		RAMUsed:     vm.Used,
-		Disk:      d.UsedPercent,
-		DiskTotal: d.Total,
-		DiskUsed:  d.Used,
-		Uptime:    h.Uptime,
-		Hostname:  h.Hostname,
-		OS:        runtime.GOOS,
-		Platform:  h.Platform,
-		Kernel:    h.KernelVersion,
-		NetSent:   netSent,
-		NetRecv:   netRecv,
+		Disk:        d.UsedPercent,
+		DiskTotal:   d.Total,
+		DiskUsed:    d.Used,
+		Uptime:      h.Uptime,
+		Hostname:    h.Hostname,
+		OS:          runtime.GOOS,
+		Platform:    h.Platform,
+		Kernel:      h.KernelVersion,
+		NetSent:     netSent,
+		NetRecv:     netRecv,
 		Connections: len(c),
 		Timestamp:   time.Now().Unix(),
 		Version:     Version,
@@ -117,17 +117,33 @@ func getStats() SystemStats {
 	return stats
 }
 
-func getLogs() (string, string) {
-	logPath := "/var/log/syslog"
+func getTail(path string, lines int) string {
 	if runtime.GOOS == "windows" {
-		return "Log viewer only supports Linux.", "Windows Demo"
+		return "Log viewer only supports Linux (Simulation Mode)."
 	}
-	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		logPath = "/var/log/messages"
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Sprintf("File %s not found.", path)
 	}
-	cmd := exec.Command("tail", "-n", "30", logPath)
+	cmd := exec.Command("tail", "-n", fmt.Sprintf("%d", lines), path)
 	output, _ := cmd.CombinedOutput()
-	return string(output), logPath
+	return string(output)
+}
+
+func getAllLogs() map[string]interface{} {
+	return map[string]interface{}{
+		"system": gin.H{
+			"content": getTail("/var/log/syslog", 30),
+			"path":    "/var/log/syslog",
+		},
+		"nginx_access": gin.H{
+			"content": getTail("/var/log/nginx/access.log", 30),
+			"path":    "/var/log/nginx/access.log",
+		},
+		"nginx_error": gin.H{
+			"content": getTail("/var/log/nginx/error.log", 30),
+			"path":    "/var/log/nginx/error.log",
+		},
+	}
 }
 
 func main() {
@@ -148,8 +164,7 @@ func main() {
 	})
 
 	r.GET("/api/logs", func(c *gin.Context) {
-		logs, path := getLogs()
-		c.JSON(200, gin.H{"logs": logs, "path": path})
+		c.JSON(200, getAllLogs())
 	})
 
 	// 2. API - Live Streaming (SSE)
@@ -159,18 +174,17 @@ func main() {
 		c.Writer.Header().Set("Connection", "keep-alive")
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(2 * time.Second) // SSE ticker slightly slower for logs
 		defer ticker.Stop()
 
 		c.Stream(func(w io.Writer) bool {
 			select {
 			case <-ticker.C:
 				stats := getStats()
-				logs, path := getLogs()
+				logs := getAllLogs()
 				data, _ := json.Marshal(gin.H{
 					"stats": stats,
 					"logs":  logs,
-					"path":  path,
 				})
 				c.SSEvent("message", string(data))
 				return true
@@ -199,16 +213,22 @@ func main() {
 		}
 		contentType := "text/plain"
 		switch {
-		case strings.HasSuffix(trimPath, ".html"): contentType = "text/html"
-		case strings.HasSuffix(trimPath, ".js"): contentType = "application/javascript"
-		case strings.HasSuffix(trimPath, ".css"): contentType = "text/css"
-		case strings.HasSuffix(trimPath, ".svg"): contentType = "image/svg+xml"
+		case strings.HasSuffix(trimPath, ".html"):
+			contentType = "text/html"
+		case strings.HasSuffix(trimPath, ".js"):
+			contentType = "application/javascript"
+		case strings.HasSuffix(trimPath, ".css"):
+			contentType = "text/css"
+		case strings.HasSuffix(trimPath, ".svg"):
+			contentType = "image/svg+xml"
 		}
 		c.Data(200, contentType, data)
 	})
 
 	port := os.Getenv("PORT")
-	if port == "" { port = "8900" }
+	if port == "" {
+		port = "8900"
+	}
 	log.Printf("🚀 AcmaDash %s running on :%s\n", Version, port)
 	r.Run(":" + port)
 }
