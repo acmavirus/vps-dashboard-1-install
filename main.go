@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 	"github.com/shirou/gopsutil/v4/net"
 )
 
-var Version = "v1.1.1"
+var Version = "v1.1.3"
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
@@ -193,6 +194,9 @@ func getAllLogs() map[string]interface{} {
 	}
 
 	if len(nginxSites) > 0 {
+		sort.Slice(nginxSites, func(i, j int) bool {
+			return nginxSites[i]["domain"].(string) < nginxSites[j]["domain"].(string)
+		})
 		logs["nginx_sites"] = nginxSites
 	}
 

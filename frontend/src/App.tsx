@@ -12,7 +12,7 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-const VERSION = "2.0.0";
+const VERSION = "2.1.1";
 
 /* ─── Types ────────────────────────────────────── */
 interface Stats {
