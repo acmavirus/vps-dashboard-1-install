@@ -22,7 +22,16 @@ interface Stats {
     kernel: string; net_sent: number; net_recv: number; connections: number;
 }
 interface LogData { content: string; path: string; }
-interface AllLogs { system: LogData; nginx_access: LogData; nginx_error: LogData; }
+interface AllLogs {
+    system: LogData;
+    nginx_access?: LogData;
+    nginx_error?: LogData;
+    nginx_sites?: {
+        domain: string;
+        access?: LogData;
+        error?: LogData;
+    }[];
+}
 
 /* ─── Helpers ──────────────────────────────────── */
 const gb = (b: number) => b ? (b / 1073741824).toFixed(1) + ' GB' : '0 GB';
@@ -37,7 +46,8 @@ export default function App() {
     const [history, setHistory] = useState<{ t: string; v: number }[]>([]);
     const [logs, setLogs] = useState<AllLogs | null>(null);
     const [live, setLive] = useState(false);
-    const [logTab, setLogTab] = useState<'system' | 'nginx_access' | 'nginx_error'>('system');
+    const [logTab, setLogTab] = useState('system');
+    const [siteTab, setSiteTab] = useState<'access' | 'error'>('access');
     const [nav, setNav] = useState(false);
     const es = useRef<EventSource | null>(null);
 
@@ -73,10 +83,33 @@ export default function App() {
     }, []);
 
     const logTabs = [
-        { key: 'system' as const, label: 'System', icon: Terminal, color: 'text-blue-400' },
-        { key: 'nginx_access' as const, label: 'Nginx', icon: Globe, color: 'text-emerald-400' },
-        { key: 'nginx_error' as const, label: 'Errors', icon: AlertTriangle, color: 'text-rose-400' },
+        { key: 'system', label: 'System', icon: Terminal, color: 'text-blue-400' },
+        ...(logs?.nginx_access || logs?.nginx_error ? [
+            { key: 'nginx_access', label: 'Nginx Access', icon: Globe, color: 'text-emerald-400' },
+            { key: 'nginx_error', label: 'Nginx Error', icon: AlertTriangle, color: 'text-rose-400' },
+        ] : []),
+        ...(logs?.nginx_sites?.map(s => ({
+            key: `site:${s.domain}`,
+            label: s.domain,
+            icon: Globe,
+            color: 'text-indigo-400'
+        })) ?? []),
     ];
+
+    const getCurrentLog = () => {
+        if (!logs) return null;
+        if (logTab === 'system') return logs.system;
+        if (logTab === 'nginx_access') return logs.nginx_access;
+        if (logTab === 'nginx_error') return logs.nginx_error;
+        if (logTab.startsWith('site:')) {
+            const domain = logTab.replace('site:', '');
+            const site = logs.nginx_sites?.find(s => s.domain === domain);
+            return siteTab === 'access' ? site?.access : site?.error;
+        }
+        return null;
+    };
+
+    const currentLog = getCurrentLog();
 
     return (
         <div className="dark min-h-screen bg-background text-foreground">
@@ -195,13 +228,13 @@ export default function App() {
                         <div className="flex flex-col lg:flex-row gap-4 h-auto lg:h-[640px]">
 
                             {/* Desktop side nav */}
-                            <div className="hidden lg:flex flex-col w-52 gap-1">
+                            <div className="hidden lg:flex flex-col w-52 gap-1 overflow-y-auto">
                                 {logTabs.map(t => (
                                     <button key={t.key} onClick={() => setLogTab(t.key)}
                                         className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-light transition-colors text-left ${logTab === t.key ? 'bg-card border border-border text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
                                         <t.icon size={15} className={logTab === t.key ? t.color : ''} />
-                                        {t.label}
-                                        {logTab === t.key && <ChevronRight size={14} className="ml-auto opacity-40" />}
+                                        <span className="truncate">{t.label}</span>
+                                        {logTab === t.key && <ChevronRight size={14} className="ml-auto opacity-40 shrink-0" />}
                                     </button>
                                 ))}
                             </div>
@@ -226,16 +259,30 @@ export default function App() {
                                             <span className="w-2.5 h-2.5 rounded-full bg-border" />
                                         </div>
                                         <span className="text-[11px] text-muted-foreground font-light truncate max-w-[300px]">
-                                            {logs?.[logTab]?.path ?? 'loading...'}
+                                            {currentLog?.path ?? 'loading...'}
                                         </span>
                                     </div>
-                                    <span className={`text-[10px] font-light flex items-center gap-1.5 ${live ? 'text-emerald-400' : 'text-muted-foreground'}`}>
-                                        <span className={`w-1.5 h-1.5 rounded-full ${live ? 'bg-emerald-500' : 'bg-muted-foreground'}`} /> {live ? 'live' : 'offline'}
-                                    </span>
+                                    <div className="flex items-center gap-4">
+                                        {logTab.startsWith('site:') && (
+                                            <div className="flex bg-background/50 rounded-md p-0.5 border border-border">
+                                                <button onClick={() => setSiteTab('access')}
+                                                    className={`px-3 py-1 text-[10px] rounded-[4px] transition-all ${siteTab === 'access' ? 'bg-secondary text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                                                    Access
+                                                </button>
+                                                <button onClick={() => setSiteTab('error')}
+                                                    className={`px-3 py-1 text-[10px] rounded-[4px] transition-all ${siteTab === 'error' ? 'bg-secondary text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
+                                                    Error
+                                                </button>
+                                            </div>
+                                        )}
+                                        <span className={`text-[10px] font-light flex items-center gap-1.5 ${live ? 'text-emerald-400' : 'text-muted-foreground'}`}>
+                                            <span className={`w-1.5 h-1.5 rounded-full ${live ? 'bg-emerald-500' : 'bg-muted-foreground'}`} /> {live ? 'live' : 'offline'}
+                                        </span>
+                                    </div>
                                 </div>
                                 <ScrollArea className="flex-1">
                                     <pre className="p-4 sm:p-5 text-[12px] sm:text-[13px] font-mono font-light leading-relaxed text-foreground/80 whitespace-pre-wrap">
-                                        {logs?.[logTab]?.content || 'Waiting for data...'}
+                                        {currentLog ? (currentLog.content || 'Log file is empty.') : 'Waiting for data...'}
                                     </pre>
                                     <div className="h-8" />
                                 </ScrollArea>

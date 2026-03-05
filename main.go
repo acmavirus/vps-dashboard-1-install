@@ -130,20 +130,73 @@ func getTail(path string, lines int) string {
 }
 
 func getAllLogs() map[string]interface{} {
-	return map[string]interface{}{
+	logs := map[string]interface{}{
 		"system": gin.H{
 			"content": getTail("/var/log/syslog", 30),
 			"path":    "/var/log/syslog",
 		},
-		"nginx_access": gin.H{
-			"content": getTail("/var/log/nginx/access.log", 30),
-			"path":    "/var/log/nginx/access.log",
-		},
-		"nginx_error": gin.H{
-			"content": getTail("/var/log/nginx/error.log", 30),
-			"path":    "/var/log/nginx/error.log",
-		},
 	}
+
+	// Real logic for Linux
+	nginxDir := "/var/log/nginx/"
+	if runtime.GOOS == "windows" {
+		// Just for local dev visibility without crashing
+		nginxDir = "./logs/nginx/" 
+		_ = os.MkdirAll(nginxDir, 0755)
+	}
+	files, err := os.ReadDir(nginxDir)
+	if err != nil {
+		logs["nginx_error"] = gin.H{"content": fmt.Sprintf("Error reading %s: %v", nginxDir, err), "path": nginxDir}
+		return logs
+	}
+
+	sitesMap := make(map[string]map[string]gin.H)
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		name := f.Name()
+		path := nginxDir + name
+
+		if strings.HasSuffix(name, "_access.log") {
+			domain := strings.TrimSuffix(name, "_access.log")
+			if _, ok := sitesMap[domain]; !ok {
+				sitesMap[domain] = make(map[string]gin.H)
+			}
+			sitesMap[domain]["access"] = gin.H{"content": getTail(path, 30), "path": path}
+		} else if strings.HasSuffix(name, "_error.log") {
+			domain := strings.TrimSuffix(name, "_error.log")
+			if _, ok := sitesMap[domain]; !ok {
+				sitesMap[domain] = make(map[string]gin.H)
+			}
+			sitesMap[domain]["error"] = gin.H{"content": getTail(path, 30), "path": path}
+		} else if name == "access.log" || name == "error.log" {
+			// Standard logs
+			key := "nginx_access"
+			if name == "error.log" {
+				key = "nginx_error"
+			}
+			logs[key] = gin.H{"content": getTail(path, 30), "path": path}
+		}
+	}
+
+	var nginxSites []gin.H
+	for domain, data := range sitesMap {
+		site := gin.H{"domain": domain}
+		if acc, ok := data["access"]; ok {
+			site["access"] = acc
+		}
+		if err, ok := data["error"]; ok {
+			site["error"] = err
+		}
+		nginxSites = append(nginxSites, site)
+	}
+
+	if len(nginxSites) > 0 {
+		logs["nginx_sites"] = nginxSites
+	}
+
+	return logs
 }
 
 func main() {
