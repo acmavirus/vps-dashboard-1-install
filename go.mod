@@ -1,12 +1,14 @@
 module github.com/acmavirus/vps-dashboard-1-install
 
-go 1.25.0
+go 1.23.0
+
+replace golang.org/x/net => golang.org/x/net v0.33.0
 
 require (
-	github.com/gin-gonic/gin v1.12.0
+	github.com/gin-gonic/gin v1.10.0
 	github.com/googollee/go-socket.io v1.7.0
 	github.com/joho/godotenv v1.5.1
-	github.com/shirou/gopsutil/v4 v4.26.2
+	github.com/shirou/gopsutil/v4 v4.24.11
 )
 
 require (

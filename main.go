@@ -24,6 +24,7 @@ import (
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 var Version = "v1.1.3"
@@ -54,6 +55,22 @@ type SystemStats struct {
 	Connections  int     `json:"connections"`
 	Timestamp    int64   `json:"timestamp"`
 	Version      string  `json:"version"`
+}
+
+type ProcessInfo struct {
+	PID     int32   `json:"pid"`
+	Name    string  `json:"name"`
+	CPU     float64 `json:"cpu"`
+	Memory  float64 `json:"memory"`
+	Command string  `json:"command"`
+}
+
+type DockerInfo struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Image  string `json:"image"`
+	CPU    string `json:"cpu"`
+	MEM    string `json:"mem"`
 }
 
 func sendTelegram(message string) {
@@ -116,6 +133,75 @@ func getStats() SystemStats {
 	}
 
 	return stats
+}
+
+func getTopProcesses() []ProcessInfo {
+	processes, err := process.Processes()
+	if err != nil {
+		return nil
+	}
+
+	var results []ProcessInfo
+	for _, p := range processes {
+		cpu, _ := p.CPUPercent()
+		mem, _ := p.MemoryPercent()
+		name, _ := p.Name()
+		cmd, _ := p.Cmdline()
+		if cpu > 0.1 || mem > 0.1 {
+			results = append(results, ProcessInfo{
+				PID:     p.Pid,
+				Name:    name,
+				CPU:     cpu,
+				Memory:  float64(mem),
+				Command: cmd,
+			})
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].CPU > results[j].CPU
+	})
+
+	if len(results) > 10 {
+		return results[:10]
+	}
+	return results
+}
+
+func getDockerStats() []DockerInfo {
+	if runtime.GOOS == "windows" {
+		return []DockerInfo{{Name: "demo-container", Status: "Running", Image: "nginx:latest", CPU: "0.5%", MEM: "120MB"}}
+	}
+	// Use docker stats command for simplicity
+	cmd := exec.Command("docker", "stats", "--no-stream", "--format", "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}")
+	output, _ := cmd.CombinedOutput()
+	lines := strings.Split(string(output), "\n")
+
+	// Also get statuses
+	cmdStat := exec.Command("docker", "ps", "-a", "--format", "{{.Names}}|{{.Status}}|{{.Image}}")
+	outStat, _ := cmdStat.CombinedOutput()
+	statLines := strings.Split(string(outStat), "\n")
+	statusMap := make(map[string]DockerInfo)
+	for _, l := range statLines {
+		parts := strings.Split(l, "|")
+		if len(parts) >= 3 {
+			statusMap[parts[0]] = DockerInfo{Name: parts[0], Status: parts[1], Image: parts[2]}
+		}
+	}
+
+	var results []DockerInfo
+	for _, l := range lines {
+		parts := strings.Split(l, "|")
+		if len(parts) >= 3 {
+			name := parts[0]
+			if info, ok := statusMap[name]; ok {
+				info.CPU = parts[1]
+				info.MEM = parts[2]
+				results = append(results, info)
+			}
+		}
+	}
+	return results
 }
 
 func getTail(path string, lines int) string {
@@ -280,6 +366,48 @@ func main() {
 			contentType = "image/svg+xml"
 		}
 		c.Data(200, contentType, data)
+	})
+
+	// New API endpoints
+	r.GET("/api/processes", func(c *gin.Context) {
+		c.JSON(200, getTopProcesses())
+	})
+
+	r.GET("/api/docker", func(c *gin.Context) {
+		c.JSON(200, getDockerStats())
+	})
+
+	r.POST("/api/control", func(c *gin.Context) {
+		var req struct {
+			Service string `json:"service"`
+			Action  string `json:"action"` // start, stop, restart
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid request"})
+			return
+		}
+		
+		// Map service names to systemd services
+		services := map[string]string{
+			"nginx": "nginx",
+			"php8.3": "php8.3-fpm",
+			"php7.4": "php7.4-fpm",
+			"mysql": "mariadb",
+		}
+		
+		target, ok := services[req.Service]
+		if !ok {
+			c.JSON(400, gin.H{"error": "Service not allowed"})
+			return
+		}
+
+		cmd := exec.Command("systemctl", req.Action, target)
+		err := cmd.Run()
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "ok"})
 	})
 
 	port := os.Getenv("PORT")

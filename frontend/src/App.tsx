@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import {
     Cpu, HardDrive, Wifi, MemoryStick, Clock, Terminal,
-    Globe, AlertTriangle, Menu, X, ChevronRight
+    Globe, AlertTriangle, Menu, X, ChevronRight,
+    Play, Square, RotateCcw, Box, Activity
 } from 'lucide-react';
 import {
     AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer
@@ -32,6 +33,20 @@ interface AllLogs {
         error?: LogData;
     }[];
 }
+interface Process {
+    pid: number;
+    name: string;
+    cpu: number;
+    memory: number;
+    command: string;
+}
+interface Container {
+    name: string;
+    status: string;
+    image: string;
+    cpu: string;
+    mem: string;
+}
 
 /* ─── Helpers ──────────────────────────────────── */
 const gb = (b: number) => b ? (b / 1073741824).toFixed(1) + ' GB' : '0 GB';
@@ -45,11 +60,15 @@ export default function App() {
     const [stats, setStats] = useState<Stats | null>(null);
     const [history, setHistory] = useState<{ t: string; v: number }[]>([]);
     const [logs, setLogs] = useState<AllLogs | null>(null);
+    const [processes, setProcesses] = useState<Process[]>([]);
+    const [containers, setContainers] = useState<Container[]>([]);
     const [live, setLive] = useState(false);
     const [logTab, setLogTab] = useState('system');
     const [siteTab, setSiteTab] = useState<'access' | 'error'>('access');
+    const [autoScroll, setAutoScroll] = useState(true);
     const [nav, setNav] = useState(false);
     const es = useRef<EventSource | null>(null);
+    const logEndRef = useRef<HTMLDivElement>(null);
 
     const push = (data: any) => {
         if (data.stats) {
@@ -73,14 +92,53 @@ export default function App() {
 
         const poll = async () => {
             try {
-                const [s, l] = await Promise.all([fetch('/api/stats').then(r => r.json()), fetch('/api/logs').then(r => r.json())]);
+                const [s, l, p, d] = await Promise.all([
+                    fetch('/api/stats').then(r => r.json()),
+                    fetch('/api/logs').then(r => r.json()),
+                    fetch('/api/processes').then(r => r.json()),
+                    fetch('/api/docker').then(r => r.json())
+                ]);
                 push({ stats: s, logs: l });
+                setProcesses(p);
+                setContainers(d);
             } catch { }
         };
         poll();
         const id = setInterval(poll, 3000);
         return () => { es.current?.close(); clearInterval(id); };
     }, []);
+
+    useEffect(() => {
+        if (autoScroll && logEndRef.current) {
+            logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [logs, logTab, siteTab, autoScroll]);
+
+    const highlightLog = (text: string) => {
+        if (!text) return text;
+        const lines = text.split('\n');
+        return lines.map((line, i) => {
+            let color = 'text-foreground/80';
+            if (line.includes('ERROR') || line.includes('Failed') || line.includes('crit')) color = 'text-rose-400 font-medium';
+            else if (line.includes('WARN') || line.includes('warning')) color = 'text-amber-400';
+            else if (line.includes(' 200 ') || line.includes('SUCCESS') || line.includes('active')) color = 'text-emerald-400';
+            else if (line.includes(' 404 ') || line.includes(' 500 ')) color = 'text-rose-500 underline';
+            
+            return <div key={i} className={color}>{line}</div>;
+        });
+    };
+
+    const handleAction = async (service: string, action: string) => {
+        if (!confirm(`Are you sure you want to ${action} ${service}?`)) return;
+        try {
+            const res = await fetch('/api/control', {
+                method: 'POST',
+                body: JSON.stringify({ service, action })
+            });
+            if (res.ok) alert('Done!');
+            else alert('Failed');
+        } catch { alert('Error'); }
+    };
 
     const logTabs = [
         { key: 'system', label: 'System', icon: Terminal, color: 'text-blue-400' },
@@ -162,6 +220,8 @@ export default function App() {
                 <Tabs defaultValue="overview" className="space-y-6">
                     <TabsList className="bg-card border border-border h-9 p-0.5 rounded-lg">
                         <TabsTrigger value="overview" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Overview</TabsTrigger>
+                        <TabsTrigger value="processes" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Processes</TabsTrigger>
+                        <TabsTrigger value="docker" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Docker</TabsTrigger>
                         <TabsTrigger value="logs" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Logs</TabsTrigger>
                     </TabsList>
 
@@ -221,6 +281,77 @@ export default function App() {
                             <InfoRow label="Kernel" value={stats?.kernel ?? '—'} />
                             <InfoRow label="OS" value={stats?.os ?? '—'} />
                         </div>
+
+                        {/* Services Management */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <ServiceRow name="Nginx" id="nginx" onAction={handleAction} icon={Globe} />
+                            <ServiceRow name="PHP 8.3" id="php8.3" onAction={handleAction} icon={Activity} />
+                            <ServiceRow name="PHP 7.4" id="php7.4" onAction={handleAction} icon={Activity} />
+                            <ServiceRow name="MariaDB" id="mysql" onAction={handleAction} icon={HardDrive} />
+                        </div>
+                    </TabsContent>
+
+                    {/* ────── Processes ────── */}
+                    <TabsContent value="processes" className="mt-0 space-y-4">
+                        <Card className="bg-card border-border overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs font-light">
+                                    <thead className="bg-secondary/30 text-muted-foreground border-b border-border">
+                                        <tr>
+                                            <th className="px-6 py-3 font-medium">PID</th>
+                                            <th className="px-6 py-3 font-medium">Name</th>
+                                            <th className="px-6 py-3 font-medium">CPU %</th>
+                                            <th className="px-6 py-3 font-medium">Mem %</th>
+                                            <th className="px-6 py-3 font-medium">Command</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-border">
+                                        {processes.map(p => (
+                                            <tr key={p.pid} className="hover:bg-secondary/10">
+                                                <td className="px-6 py-3 tabular-nums">{p.pid}</td>
+                                                <td className="px-6 py-3 font-normal">{p.name}</td>
+                                                <td className="px-6 py-3 tabular-nums">{p.cpu.toFixed(1)}</td>
+                                                <td className="px-6 py-3 tabular-nums">{p.memory.toFixed(1)}</td>
+                                                <td className="px-6 py-3 text-muted-foreground truncate max-w-xs" title={p.command}>{p.command}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </Card>
+                    </TabsContent>
+
+                    {/* ────── Docker ────── */}
+                    <TabsContent value="docker" className="mt-0 space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {containers.map((c, i) => (
+                                <Card key={i} className="bg-card border-border">
+                                    <CardContent className="p-5 space-y-4">
+                                        <div className="flex items-start justify-between">
+                                            <div className="space-y-1">
+                                                <h3 className="text-sm font-semibold truncate max-w-[180px]">{c.name}</h3>
+                                                <p className="text-[10px] text-muted-foreground truncate max-w-[180px]">{c.image}</p>
+                                            </div>
+                                            <Box size={16} className="text-indigo-400" />
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className={`w-1.5 h-1.5 rounded-full ${c.status.toLowerCase().includes('up') ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                            <span className="text-[11px] text-muted-foreground">{c.status}</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4 pt-2 border-t border-border">
+                                            <div>
+                                                <p className="text-[10px] text-muted-foreground mb-1">CPU Usage</p>
+                                                <p className="text-sm tabular-nums">{c.cpu}</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[10px] text-muted-foreground mb-1">Memory</p>
+                                                <p className="text-sm tabular-nums">{c.mem}</p>
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            ))}
+                        </div>
                     </TabsContent>
 
                     {/* ────── Logs ────── */}
@@ -278,12 +409,23 @@ export default function App() {
                                         <span className={`text-[10px] font-light flex items-center gap-1.5 ${live ? 'text-emerald-400' : 'text-muted-foreground'}`}>
                                             <span className={`w-1.5 h-1.5 rounded-full ${live ? 'bg-emerald-500' : 'bg-muted-foreground'}`} /> {live ? 'live' : 'offline'}
                                         </span>
+                                        <div className="flex items-center gap-2 border-l border-border pl-4">
+                                            <input 
+                                                type="checkbox" 
+                                                id="autoscroll" 
+                                                checked={autoScroll} 
+                                                onChange={(e) => setAutoScroll(e.target.checked)}
+                                                className="w-3 h-3 rounded bg-zinc-800 border-zinc-700"
+                                            />
+                                            <label htmlFor="autoscroll" className="text-[10px] text-muted-foreground select-none cursor-pointer">Auto-scroll</label>
+                                        </div>
                                     </div>
                                 </div>
                                 <ScrollArea className="flex-1">
-                                    <pre className="p-4 sm:p-5 text-[12px] sm:text-[13px] font-mono font-light leading-relaxed text-foreground/80 whitespace-pre-wrap">
-                                        {currentLog ? (currentLog.content || 'Log file is empty.') : 'Waiting for data...'}
-                                    </pre>
+                                    <div className="p-4 sm:p-5 text-[12px] sm:text-[13px] font-mono font-light leading-relaxed whitespace-pre-wrap">
+                                        {currentLog ? highlightLog(currentLog.content) : 'Waiting for data...'}
+                                        <div ref={logEndRef} />
+                                    </div>
                                     <div className="h-8" />
                                 </ScrollArea>
                             </Card>
@@ -338,6 +480,28 @@ function InfoRow({ label, value }: { label: string; value: string }) {
         <div className="flex items-center justify-between bg-card border border-border rounded-lg px-4 py-3">
             <span className="text-xs text-muted-foreground font-light">{label}</span>
             <span className="text-xs font-normal text-foreground truncate max-w-[180px]">{value}</span>
+        </div>
+    );
+}
+
+function ServiceRow({ name, id, onAction, icon: Icon }: { name: string, id: string, onAction: any, icon: any }) {
+    return (
+        <div className="flex items-center justify-between bg-card border border-border rounded-lg px-5 py-4">
+            <div className="flex items-center gap-3">
+                <Icon size={16} className="text-muted-foreground" />
+                <span className="text-xs font-medium">{name}</span>
+            </div>
+            <div className="flex gap-2">
+                <button onClick={() => onAction(id, 'restart')} title="Restart" className="p-1.5 hover:bg-secondary rounded-md text-muted-foreground hover:text-blue-400 transition-colors">
+                    <RotateCcw size={14} />
+                </button>
+                <button onClick={() => onAction(id, 'stop')} title="Stop" className="p-1.5 hover:bg-secondary rounded-md text-muted-foreground hover:text-rose-400 transition-colors">
+                    <Square size={14} />
+                </button>
+                <button onClick={() => onAction(id, 'start')} title="Start" className="p-1.5 hover:bg-secondary rounded-md text-muted-foreground hover:text-emerald-400 transition-colors">
+                    <Play size={14} />
+                </button>
+            </div>
         </div>
     );
 }
