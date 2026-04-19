@@ -27,7 +27,7 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-var Version = "v1.1.3"
+var Version = "v2.2.3"
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
@@ -35,6 +35,9 @@ var frontendFS embed.FS
 var (
 	lastCpuAlert  time.Time
 	lastDdosAlert time.Time
+	
+	cachedDomains   []DomainInfo
+	lastDomainCheck time.Time
 )
 
 type SystemStats struct {
@@ -71,6 +74,12 @@ type DockerInfo struct {
 	Image  string `json:"image"`
 	CPU    string `json:"cpu"`
 	MEM    string `json:"mem"`
+}
+
+type DomainInfo struct {
+	Domain string `json:"domain"`
+	Status string `json:"status"` // online, offline
+	Code   int    `json:"code"`
 }
 
 func sendTelegram(message string) {
@@ -204,6 +213,84 @@ func getDockerStats() []DockerInfo {
 	return results
 }
 
+func getPM2Stats() interface{} {
+	if runtime.GOOS == "windows" {
+		return []map[string]interface{}{
+			{"name": "demo-api", "pm_id": 0, "status": "online", "monit": map[string]interface{}{"cpu": 1.2, "memory": 45000000}, "pm2_env": map[string]interface{}{"pm_uptime": time.Now().Unix() * 1000}},
+		}
+	}
+	cmd := exec.Command("pm2", "jlist")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return []interface{}{}
+	}
+	var data interface{}
+	_ = json.Unmarshal(output, &data)
+	return data
+}
+
+func getDomains() []DomainInfo {
+	// Trả về cache nếu chưa quá 5 phút
+	if time.Since(lastDomainCheck) < 5*time.Minute && len(cachedDomains) > 0 {
+		return cachedDomains
+	}
+
+	sitesEnabledDir := "/etc/nginx/sites-enabled/"
+	if runtime.GOOS == "windows" {
+		sitesEnabledDir = "./logs/sites-enabled/"
+	}
+
+	files, err := os.ReadDir(sitesEnabledDir)
+	if err != nil {
+		return []DomainInfo{}
+	}
+
+	var domains []string
+	for _, f := range files {
+		if f.IsDir() || f.Name() == "default" || f.Name() == "phpmyadmin" {
+			continue
+		}
+		domains = append(domains, strings.TrimSuffix(f.Name(), ".conf"))
+	}
+
+	results := make([]DomainInfo, len(domains))
+	type resChan struct {
+		index int
+		info  DomainInfo
+	}
+	ch := make(chan resChan, len(domains))
+
+	for i, d := range domains {
+		go func(index int, domain string) {
+			client := http.Client{Timeout: 3 * time.Second}
+			// Chỉ check HTTP HEAD để giảm tải
+			resp, err := client.Head("http://" + domain)
+			status := "online"
+			code := 0
+			if err != nil {
+				status = "offline"
+			} else {
+				code = resp.StatusCode
+				resp.Body.Close()
+			}
+			ch <- resChan{index, DomainInfo{Domain: domain, Status: status, Code: code}}
+		}(i, d)
+	}
+
+	for i := 0; i < len(domains); i++ {
+		r := <-ch
+		results[r.index] = r.info
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Domain < results[j].Domain
+	})
+
+	cachedDomains = results
+	lastDomainCheck = time.Now()
+	return results
+}
+
 func getTail(path string, lines int) string {
 	if runtime.GOOS == "windows" {
 		return "Log viewer only supports Linux (Simulation Mode)."
@@ -224,46 +311,77 @@ func getAllLogs() map[string]interface{} {
 		},
 	}
 
-	// Real logic for Linux
 	nginxDir := "/var/log/nginx/"
+	sitesEnabledDir := "/etc/nginx/sites-enabled/"
+	
 	if runtime.GOOS == "windows" {
-		// Just for local dev visibility without crashing
 		nginxDir = "./logs/nginx/" 
+		sitesEnabledDir = "./logs/sites-enabled/"
 		_ = os.MkdirAll(nginxDir, 0755)
-	}
-	files, err := os.ReadDir(nginxDir)
-	if err != nil {
-		logs["nginx_error"] = gin.H{"content": fmt.Sprintf("Error reading %s: %v", nginxDir, err), "path": nginxDir}
-		return logs
+		_ = os.MkdirAll(sitesEnabledDir, 0755)
 	}
 
-	sitesMap := make(map[string]map[string]gin.H)
-	for _, f := range files {
-		if f.IsDir() {
-			continue
+	// 1. Get domains from sites-enabled (the source of truth)
+	domains := []string{}
+	siteFiles, err := os.ReadDir(sitesEnabledDir)
+	if err == nil {
+		for _, f := range siteFiles {
+			if f.IsDir() {
+				continue
+			}
+			name := f.Name()
+			if name == "default" || name == "phpmyadmin" {
+				continue
+			}
+			domain := strings.TrimSuffix(name, ".conf")
+			domains = append(domains, domain)
 		}
-		name := f.Name()
-		path := nginxDir + name
+	}
 
-		if strings.HasSuffix(name, "_access.log") {
-			domain := strings.TrimSuffix(name, "_access.log")
-			if _, ok := sitesMap[domain]; !ok {
-				sitesMap[domain] = make(map[string]gin.H)
+	// 2. Also check log directory for other potential logs (fallback)
+	logFiles, _ := os.ReadDir(nginxDir)
+	sitesMap := make(map[string]map[string]gin.H)
+	
+	// Pre-fill from sites-enabled
+	for _, d := range domains {
+		sitesMap[d] = make(map[string]gin.H)
+		accPath := nginxDir + d + "_access.log"
+		errPath := nginxDir + d + "_error.log"
+		sitesMap[d]["access"] = gin.H{"content": getTail(accPath, 30), "path": accPath}
+		sitesMap[d]["error"] = gin.H{"content": getTail(errPath, 30), "path": errPath}
+	}
+
+	// Scan log directory to catch any missed or differently named logs
+	if logFiles != nil {
+		for _, f := range logFiles {
+			if f.IsDir() {
+				continue
 			}
-			sitesMap[domain]["access"] = gin.H{"content": getTail(path, 30), "path": path}
-		} else if strings.HasSuffix(name, "_error.log") {
-			domain := strings.TrimSuffix(name, "_error.log")
-			if _, ok := sitesMap[domain]; !ok {
-				sitesMap[domain] = make(map[string]gin.H)
+			name := f.Name()
+			path := nginxDir + name
+
+			if name == "access.log" || name == "error.log" {
+				key := "nginx_access"
+				if name == "error.log" {
+					key = "nginx_error"
+				}
+				logs[key] = gin.H{"content": getTail(path, 30), "path": path}
+				continue
 			}
-			sitesMap[domain]["error"] = gin.H{"content": getTail(path, 30), "path": path}
-		} else if name == "access.log" || name == "error.log" {
-			// Standard logs
-			key := "nginx_access"
-			if name == "error.log" {
-				key = "nginx_error"
+
+			if strings.HasSuffix(name, "_access.log") {
+				domain := strings.TrimSuffix(name, "_access.log")
+				if _, ok := sitesMap[domain]; !ok {
+					sitesMap[domain] = make(map[string]gin.H)
+				}
+				sitesMap[domain]["access"] = gin.H{"content": getTail(path, 30), "path": path}
+			} else if strings.HasSuffix(name, "_error.log") {
+				domain := strings.TrimSuffix(name, "_error.log")
+				if _, ok := sitesMap[domain]; !ok {
+					sitesMap[domain] = make(map[string]gin.H)
+				}
+				sitesMap[domain]["error"] = gin.H{"content": getTail(path, 30), "path": path}
 			}
-			logs[key] = gin.H{"content": getTail(path, 30), "path": path}
 		}
 	}
 
@@ -301,41 +419,161 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 
-	// 1. API - Standard
-	r.GET("/api/stats", func(c *gin.Context) {
-		c.JSON(200, getStats())
+	// --- Authentication Configuration ---
+	adminUser := os.Getenv("ADMIN_USER")
+	if adminUser == "" {
+		adminUser = "admin"
+	}
+	adminPass := os.Getenv("ADMIN_PASS")
+	if adminPass == "" {
+		adminPass = "h5jH7Gv|5m+0" // Mật khẩu cố định theo yêu cầu
+	}
+	authToken := os.Getenv("AUTH_TOKEN")
+	if authToken == "" {
+		authToken = "acmadash_secret_token_2024"
+	}
+
+	authMiddleware := func(c *gin.Context) {
+		// Kiểm tra token từ Header hoặc Query (cho SSE)
+		token := c.GetHeader("Authorization")
+		if token == "" {
+			token = c.Query("token")
+		}
+
+		if token != authToken {
+			c.JSON(401, gin.H{"error": "Unauthorized"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+
+	r.POST("/api/login", func(c *gin.Context) {
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		if req.Username == adminUser && req.Password == adminPass {
+			c.JSON(200, gin.H{
+				"status": "ok",
+				"token":  authToken,
+			})
+		} else {
+			c.JSON(401, gin.H{"error": "Sai tài khoản hoặc mật khẩu"})
+		}
 	})
 
-	r.GET("/api/logs", func(c *gin.Context) {
-		c.JSON(200, getAllLogs())
-	})
-
-	// 2. API - Live Streaming (SSE)
-	r.GET("/api/stream", func(c *gin.Context) {
-		c.Writer.Header().Set("Content-Type", "text/event-stream")
-		c.Writer.Header().Set("Cache-Control", "no-cache")
-		c.Writer.Header().Set("Connection", "keep-alive")
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-
-		ticker := time.NewTicker(1 * time.Second) // 1s update frequency for real-time feel
-		defer ticker.Stop()
-
-		c.Stream(func(w io.Writer) bool {
-			select {
-			case <-ticker.C:
-				stats := getStats()
-				logs := getAllLogs()
-				data, _ := json.Marshal(gin.H{
-					"stats": stats,
-					"logs":  logs,
-				})
-				c.SSEvent("message", string(data))
-				return true
-			case <-c.Request.Context().Done():
-				return false
-			}
+	// 1. API - Protected Group
+	api := r.Group("/api")
+	api.Use(authMiddleware)
+	{
+		api.GET("/stats", func(c *gin.Context) {
+			c.JSON(200, getStats())
 		})
-	})
+
+		api.GET("/logs", func(c *gin.Context) {
+			c.JSON(200, getAllLogs())
+		})
+
+		api.GET("/processes", func(c *gin.Context) {
+			c.JSON(200, getTopProcesses())
+		})
+
+		api.GET("/docker", func(c *gin.Context) {
+			c.JSON(200, getDockerStats())
+		})
+
+		api.POST("/control", func(c *gin.Context) {
+			var req struct {
+				Service string `json:"service"`
+				Action  string `json:"action"` // start, stop, restart
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+			
+			services := map[string]string{
+				"nginx": "nginx",
+				"php8.3": "php8.3-fpm",
+				"php7.4": "php7.4-fpm",
+				"mysql": "mariadb",
+			}
+			
+			target, ok := services[req.Service]
+			if !ok {
+				c.JSON(400, gin.H{"error": "Service not allowed"})
+				return
+			}
+
+			cmd := exec.Command("systemctl", req.Action, target)
+			err := cmd.Run()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.GET("/pm2", func(c *gin.Context) {
+			c.JSON(200, getPM2Stats())
+		})
+
+		api.GET("/domains", func(c *gin.Context) {
+			c.JSON(200, getDomains())
+		})
+
+		api.POST("/pm2/control", func(c *gin.Context) {
+			var req struct {
+				Name   string `json:"name"`
+				Action string `json:"action"` // restart, stop, start, delete
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+			
+			cmd := exec.Command("pm2", req.Action, req.Name)
+			err := cmd.Run()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		// SSE - Real-time Streaming
+		api.GET("/stream", func(c *gin.Context) {
+			c.Writer.Header().Set("Content-Type", "text/event-stream")
+			c.Writer.Header().Set("Cache-Control", "no-cache")
+			c.Writer.Header().Set("Connection", "keep-alive")
+			c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+
+			c.Stream(func(w io.Writer) bool {
+				select {
+				case <-ticker.C:
+					stats := getStats()
+					logs := getAllLogs()
+					data, _ := json.Marshal(gin.H{
+						"stats": stats,
+						"logs":  logs,
+					})
+					c.SSEvent("message", string(data))
+					return true
+				case <-c.Request.Context().Done():
+					return false
+				}
+			})
+		})
+	}
 
 	// 3. Static Files
 	publicFS, _ := fs.Sub(frontendFS, "frontend/dist")
@@ -366,48 +604,6 @@ func main() {
 			contentType = "image/svg+xml"
 		}
 		c.Data(200, contentType, data)
-	})
-
-	// New API endpoints
-	r.GET("/api/processes", func(c *gin.Context) {
-		c.JSON(200, getTopProcesses())
-	})
-
-	r.GET("/api/docker", func(c *gin.Context) {
-		c.JSON(200, getDockerStats())
-	})
-
-	r.POST("/api/control", func(c *gin.Context) {
-		var req struct {
-			Service string `json:"service"`
-			Action  string `json:"action"` // start, stop, restart
-		}
-		if err := c.BindJSON(&req); err != nil {
-			c.JSON(400, gin.H{"error": "Invalid request"})
-			return
-		}
-		
-		// Map service names to systemd services
-		services := map[string]string{
-			"nginx": "nginx",
-			"php8.3": "php8.3-fpm",
-			"php7.4": "php7.4-fpm",
-			"mysql": "mariadb",
-		}
-		
-		target, ok := services[req.Service]
-		if !ok {
-			c.JSON(400, gin.H{"error": "Service not allowed"})
-			return
-		}
-
-		cmd := exec.Command("systemctl", req.Action, target)
-		err := cmd.Run()
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		c.JSON(200, gin.H{"status": "ok"})
 	})
 
 	port := os.Getenv("PORT")

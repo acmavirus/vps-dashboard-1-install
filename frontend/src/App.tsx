@@ -47,6 +47,11 @@ interface Container {
     cpu: string;
     mem: string;
 }
+interface Domain {
+    domain: string;
+    status: string;
+    code: number;
+}
 
 /* ─── Helpers ──────────────────────────────────── */
 const gb = (b: number) => b ? (b / 1073741824).toFixed(1) + ' GB' : '0 GB';
@@ -57,11 +62,14 @@ const uptime = (s: number) => {
 
 /* ─── Component ────────────────────────────────── */
 export default function App() {
+    const [token, setToken] = useState<string | null>(localStorage.getItem('auth_token'));
     const [stats, setStats] = useState<Stats | null>(null);
     const [history, setHistory] = useState<{ t: string; v: number }[]>([]);
     const [logs, setLogs] = useState<AllLogs | null>(null);
     const [processes, setProcesses] = useState<Process[]>([]);
     const [containers, setContainers] = useState<Container[]>([]);
+    const [pm2, setPm2] = useState<any[]>([]);
+    const [domains, setDomains] = useState<Domain[]>([]);
     const [live, setLive] = useState(false);
     const [logTab, setLogTab] = useState('system');
     const [siteTab, setSiteTab] = useState<'access' | 'error'>('access');
@@ -69,6 +77,42 @@ export default function App() {
     const [nav, setNav] = useState(false);
     const es = useRef<EventSource | null>(null);
     const logEndRef = useRef<HTMLDivElement>(null);
+
+    // Login State
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const handleLogin = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        try {
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                localStorage.setItem('auth_token', data.token);
+                setToken(data.token);
+            } else {
+                setError(data.error || 'Login failed');
+            }
+        } catch {
+            setError('Server error');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleLogout = () => {
+        localStorage.removeItem('auth_token');
+        setToken(null);
+        if (es.current) es.current.close();
+    };
 
     const push = (data: any) => {
         if (data.stats) {
@@ -80,33 +124,59 @@ export default function App() {
     };
 
     useEffect(() => {
+        if (!token) return;
+
         const connect = () => {
             es.current?.close();
-            const s = new EventSource('/api/stream');
+            // Gửi token qua query string cho SSE
+            const s = new EventSource(`/api/stream?token=${token}`);
             es.current = s;
             s.onopen = () => setLive(true);
-            s.onerror = () => { setLive(false); s.close(); setTimeout(connect, 3000); };
+            s.onerror = (e) => { 
+                console.error("SSE Error:", e);
+                setLive(false); 
+                s.close(); 
+                // Nếu lỗi 401 (unauthorized) thì logout
+                setTimeout(connect, 3000); 
+            };
             s.onmessage = e => { try { push(JSON.parse(e.data)); } catch { } };
         };
         connect();
 
         const poll = async () => {
             try {
-                const [s, l, p, d] = await Promise.all([
-                    fetch('/api/stats').then(r => r.json()),
-                    fetch('/api/logs').then(r => r.json()),
-                    fetch('/api/processes').then(r => r.json()),
-                    fetch('/api/docker').then(r => r.json())
+                const headers = { 'Authorization': token };
+                const fetchOpts = { headers };
+                
+                const responses = await Promise.all([
+                    fetch('/api/stats', fetchOpts),
+                    fetch('/api/logs', fetchOpts),
+                    fetch('/api/processes', fetchOpts),
+                    fetch('/api/docker', fetchOpts),
+                    fetch('/api/pm2', fetchOpts),
+                    fetch('/api/domains', fetchOpts)
                 ]);
+
+                // Check for 401
+                if (responses.some(r => r.status === 401)) {
+                    handleLogout();
+                    return;
+                }
+
+                const [s, l, p, d, pm, doms] = await Promise.all(responses.map(r => r.json()));
                 push({ stats: s, logs: l });
                 setProcesses(p);
                 setContainers(d);
-            } catch { }
+                setPm2(pm);
+                setDomains(doms);
+            } catch (err) {
+                console.error("Polling error:", err);
+            }
         };
         poll();
         const id = setInterval(poll, 3000);
         return () => { es.current?.close(); clearInterval(id); };
-    }, []);
+    }, [token]);
 
     useEffect(() => {
         if (autoScroll && logEndRef.current) {
@@ -133,9 +203,31 @@ export default function App() {
         try {
             const res = await fetch('/api/control', {
                 method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': token || ''
+                },
                 body: JSON.stringify({ service, action })
             });
             if (res.ok) alert('Done!');
+            else if (res.status === 401) handleLogout();
+            else alert('Failed');
+        } catch { alert('Error'); }
+    };
+
+    const handlePM2Action = async (name: string, action: string) => {
+        if (!confirm(`Are you sure you want to ${action} ${name}?`)) return;
+        try {
+            const res = await fetch('/api/pm2/control', {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': token || ''
+                },
+                body: JSON.stringify({ name, action })
+            });
+            if (res.ok) alert('Done!');
+            else if (res.status === 401) handleLogout();
             else alert('Failed');
         } catch { alert('Error'); }
     };
@@ -169,6 +261,53 @@ export default function App() {
 
     const currentLog = getCurrentLog();
 
+    if (!token) {
+        return (
+            <div className="dark min-h-screen bg-background text-foreground flex items-center justify-center p-4">
+                <Card className="w-full max-w-md bg-card border-border">
+                    <CardHeader className="space-y-1 text-center">
+                        <CardTitle className="text-2xl font-light tracking-tight">AcmaDash Login</CardTitle>
+                        <p className="text-sm text-muted-foreground font-light">Enter your credentials to access the dashboard</p>
+                    </CardHeader>
+                    <CardContent>
+                        <form onSubmit={handleLogin} className="space-y-4">
+                            <div className="space-y-2">
+                                <label className="text-xs font-light text-muted-foreground">Username</label>
+                                <input 
+                                    type="text" 
+                                    value={username} 
+                                    onChange={e => setUsername(e.target.value)}
+                                    className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                    placeholder="admin"
+                                    required
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-xs font-light text-muted-foreground">Password</label>
+                                <input 
+                                    type="password" 
+                                    value={password} 
+                                    onChange={e => setPassword(e.target.value)}
+                                    className="w-full bg-secondary/50 border border-border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                    placeholder="••••••••"
+                                    required
+                                />
+                            </div>
+                            {error && <p className="text-xs text-rose-400 text-center">{error}</p>}
+                            <button 
+                                type="submit" 
+                                disabled={loading}
+                                className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg py-2 text-sm font-medium transition-colors disabled:opacity-50"
+                            >
+                                {loading ? 'Logging in...' : 'Sign In'}
+                            </button>
+                        </form>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+
     return (
         <div className="dark min-h-screen bg-background text-foreground">
             {/* Mobile nav overlay */}
@@ -187,6 +326,11 @@ export default function App() {
                             <t.icon size={16} /> {t.label}
                         </button>
                     ))}
+                    <div className="pt-4 mt-4 border-t border-border">
+                        <button onClick={handleLogout} className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-light text-rose-400 hover:bg-rose-400/10 transition-colors">
+                             Logout
+                        </button>
+                    </div>
                 </nav>
             </aside>
 
@@ -212,6 +356,7 @@ export default function App() {
                         <span className="hidden md:flex items-center gap-1.5">
                             <Clock size={13} /> {stats ? uptime(stats.uptime) : '--'}
                         </span>
+                        <button onClick={handleLogout} className="text-[10px] hover:text-foreground border border-border px-2 py-1 rounded transition-colors">Logout</button>
                         <span className="text-[10px] text-muted-foreground/60">v{VERSION}</span>
                     </div>
                 </header>
@@ -222,6 +367,8 @@ export default function App() {
                         <TabsTrigger value="overview" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Overview</TabsTrigger>
                         <TabsTrigger value="processes" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Processes</TabsTrigger>
                         <TabsTrigger value="docker" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Docker</TabsTrigger>
+                        <TabsTrigger value="nodes" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Nodes</TabsTrigger>
+                        <TabsTrigger value="domains" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Domains</TabsTrigger>
                         <TabsTrigger value="logs" className="text-xs font-normal rounded-md px-4 h-full data-[state=active]:bg-secondary data-[state=active]:shadow-sm">Logs</TabsTrigger>
                     </TabsList>
 
@@ -352,6 +499,99 @@ export default function App() {
                                 </Card>
                             ))}
                         </div>
+                    </TabsContent>
+
+                    {/* ────── Nodes (PM2) ────── */}
+                    <TabsContent value="nodes" className="mt-0 space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {pm2.map((p, i) => (
+                                <Card key={i} className="bg-card border-border">
+                                    <CardContent className="p-5 space-y-4">
+                                        <div className="flex items-start justify-between">
+                                            <div className="space-y-1">
+                                                <div className="flex items-center gap-2">
+                                                    <h3 className="text-sm font-semibold truncate max-w-[150px]">{p.name}</h3>
+                                                    <span className="text-[10px] bg-secondary px-1.5 py-0.5 rounded text-muted-foreground">ID: {p.pm_id}</span>
+                                                </div>
+                                                <p className="text-[10px] text-muted-foreground truncate max-w-[180px]">
+                                                    {p.pm2_env?.pm_uptime ? uptime(Math.floor((Date.now() - p.pm2_env.pm_uptime) / 1000)) : 'N/A'}
+                                                </p>
+                                            </div>
+                                            <div className="flex gap-1">
+                                                <button onClick={() => handlePM2Action(p.name, 'restart')} title="Restart" className="p-1 hover:bg-secondary rounded text-muted-foreground hover:text-blue-400">
+                                                    <RotateCcw size={14} />
+                                                </button>
+                                                <button onClick={() => handlePM2Action(p.name, 'stop')} title="Stop" className="p-1 hover:bg-secondary rounded text-muted-foreground hover:text-rose-400">
+                                                    <Square size={14} />
+                                                </button>
+                                                <button onClick={() => handlePM2Action(p.name, 'start')} title="Start" className="p-1 hover:bg-secondary rounded text-muted-foreground hover:text-emerald-400">
+                                                    <Play size={14} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className={`w-1.5 h-1.5 rounded-full ${p.status === 'online' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                            <span className="text-[11px] text-muted-foreground capitalize">{p.status}</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4 pt-2 border-t border-border">
+                                            <div>
+                                                <p className="text-[10px] text-muted-foreground mb-1">CPU</p>
+                                                <p className="text-sm tabular-nums">{p.monit?.cpu ?? 0}%</p>
+                                            </div>
+                                            <div>
+                                                <p className="text-[10px] text-muted-foreground mb-1">Memory</p>
+                                                <p className="text-sm tabular-nums">{gb(p.monit?.memory ?? 0)}</p>
+                                            </div>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+                            ))}
+                            {pm2.length === 0 && (
+                                <div className="col-span-full py-12 text-center border border-dashed border-border rounded-xl">
+                                    <Activity className="mx-auto mb-3 opacity-20" size={32} />
+                                    <p className="text-sm text-muted-foreground font-light">No PM2 processes found</p>
+                                </div>
+                            )}
+                        </div>
+                    </TabsContent>
+
+                    {/* ────── Domains ────── */}
+                    <TabsContent value="domains" className="mt-0">
+                        <Card className="bg-card border-border overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-xs font-light">
+                                    <thead className="bg-secondary/30 text-muted-foreground border-b border-border">
+                                        <tr>
+                                            <th className="px-6 py-3 font-medium">Domain</th>
+                                            <th className="px-6 py-3 font-medium">Status</th>
+                                            <th className="px-6 py-3 font-medium">HTTP Code</th>
+                                            <th className="px-6 py-3 font-medium">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-border">
+                                        {domains.map((d, i) => (
+                                            <tr key={i} className="hover:bg-secondary/10">
+                                                <td className="px-6 py-3 font-normal">{d.domain}</td>
+                                                <td className="px-6 py-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`w-1.5 h-1.5 rounded-full ${d.status === 'online' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                                                        <span className="capitalize">{d.status}</span>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-3 tabular-nums">
+                                                    <span className={d.code >= 200 && d.code < 400 ? 'text-emerald-400' : 'text-rose-400'}>
+                                                        {d.code || '—'}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-3">
+                                                    <a href={`http://${d.domain}`} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">Visit</a>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </Card>
                     </TabsContent>
 
                     {/* ────── Logs ────── */}
