@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"embed"
 	"encoding/json"
 	"flag"
@@ -12,6 +13,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -35,29 +38,29 @@ var frontendFS embed.FS
 var (
 	lastCpuAlert  time.Time
 	lastDdosAlert time.Time
-	
+
 	cachedDomains   []DomainInfo
 	lastDomainCheck time.Time
 )
 
 type SystemStats struct {
-	CPU          float64 `json:"cpu"`
-	RAM          float64 `json:"ram"`
-	RAMTotal     uint64  `json:"ram_total"`
-	RAMUsed      uint64  `json:"ram_used"`
-	Disk         float64 `json:"disk"`
-	DiskTotal    uint64  `json:"disk_total"`
-	DiskUsed     uint64  `json:"disk_used"`
-	Uptime       uint64  `json:"uptime"`
-	Hostname     string  `json:"hostname"`
-	OS           string  `json:"os"`
-	Platform     string  `json:"platform"`
-	Kernel       string  `json:"kernel"`
-	NetSent      uint64  `json:"net_sent"`
-	NetRecv      uint64  `json:"net_recv"`
-	Connections  int     `json:"connections"`
-	Timestamp    int64   `json:"timestamp"`
-	Version      string  `json:"version"`
+	CPU         float64 `json:"cpu"`
+	RAM         float64 `json:"ram"`
+	RAMTotal    uint64  `json:"ram_total"`
+	RAMUsed     uint64  `json:"ram_used"`
+	Disk        float64 `json:"disk"`
+	DiskTotal   uint64  `json:"disk_total"`
+	DiskUsed    uint64  `json:"disk_used"`
+	Uptime      uint64  `json:"uptime"`
+	Hostname    string  `json:"hostname"`
+	OS          string  `json:"os"`
+	Platform    string  `json:"platform"`
+	Kernel      string  `json:"kernel"`
+	NetSent     uint64  `json:"net_sent"`
+	NetRecv     uint64  `json:"net_recv"`
+	Connections int     `json:"connections"`
+	Timestamp   int64   `json:"timestamp"`
+	Version     string  `json:"version"`
 }
 
 type ProcessInfo struct {
@@ -80,6 +83,389 @@ type DomainInfo struct {
 	Domain string `json:"domain"`
 	Status string `json:"status"` // online, offline
 	Code   int    `json:"code"`
+	Note   string `json:"note,omitempty"`
+}
+
+type domainPaths struct {
+	sitesEnabledDir   string
+	sitesAvailableDir string
+	nginxLogDir       string
+}
+
+type domainDeleteResult struct {
+	Domain      string   `json:"domain"`
+	Deleted     []string `json:"deleted"`
+	Database    string   `json:"database,omitempty"`
+	RootPath    string   `json:"root_path,omitempty"`
+	DeleteDB    bool     `json:"delete_db"`
+	DeleteRoot  bool     `json:"delete_root"`
+	NginxReload bool     `json:"nginx_reload"`
+}
+
+var (
+	domainNamePattern = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
+	dbNamePattern     = regexp.MustCompile(`^[a-zA-Z0-9_.$-]+$`)
+)
+
+func getDomainPaths() domainPaths {
+	paths := domainPaths{
+		sitesEnabledDir:   "/etc/nginx/sites-enabled",
+		sitesAvailableDir: "/etc/nginx/sites-available",
+		nginxLogDir:       "/var/log/nginx",
+	}
+	if runtime.GOOS == "windows" {
+		paths.sitesEnabledDir = "./logs/sites-enabled"
+		paths.sitesAvailableDir = "./logs/sites-available"
+		paths.nginxLogDir = "./logs/nginx"
+	}
+	return paths
+}
+
+func clearDomainCache() {
+	cachedDomains = nil
+	lastDomainCheck = time.Time{}
+}
+
+func getDomainNotesPath() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(".", "data", "domain-notes.json")
+	}
+	return filepath.Join("/usr/local/bin", "data", "domain-notes.json")
+}
+
+func loadDomainNotes() map[string]string {
+	path := getDomainNotesPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]string{}
+	}
+
+	notes := map[string]string{}
+	if err := json.Unmarshal(data, &notes); err != nil {
+		return map[string]string{}
+	}
+	return notes
+}
+
+func saveDomainNotes(notes map[string]string) error {
+	path := getDomainNotesPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(notes, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func updateDomainNote(domain string, note string) error {
+	notes := loadDomainNotes()
+	note = strings.TrimSpace(note)
+	if note == "" {
+		delete(notes, domain)
+	} else {
+		notes[domain] = note
+	}
+
+	if err := saveDomainNotes(notes); err != nil {
+		return err
+	}
+
+	clearDomainCache()
+	return nil
+}
+
+func sanitizeDomain(domain string) (string, error) {
+	domain = strings.TrimSpace(strings.ToLower(domain))
+	if domain == "" || !domainNamePattern.MatchString(domain) || strings.Contains(domain, "..") {
+		return "", fmt.Errorf("invalid domain")
+	}
+	return domain, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func getDomainConfigCandidates(domain string) []string {
+	paths := getDomainPaths()
+	return []string{
+		filepath.Join(paths.sitesEnabledDir, domain),
+		filepath.Join(paths.sitesEnabledDir, domain+".conf"),
+		filepath.Join(paths.sitesAvailableDir, domain),
+		filepath.Join(paths.sitesAvailableDir, domain+".conf"),
+	}
+}
+
+func findDomainConfigPath(domain string) (string, error) {
+	for _, path := range getDomainConfigCandidates(domain) {
+		if fileExists(path) {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("domain config not found")
+}
+
+func parseNginxRoot(configPath string) (string, error) {
+	file, err := os.Open(configPath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if idx := strings.Index(line, "#"); idx >= 0 {
+			line = strings.TrimSpace(line[:idx])
+		}
+		if !strings.HasPrefix(line, "root ") {
+			continue
+		}
+		root := strings.TrimSpace(strings.TrimPrefix(line, "root"))
+		root = strings.TrimSuffix(root, ";")
+		root = strings.Trim(root, `"'`)
+		if root != "" {
+			return filepath.Clean(root), nil
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("root directive not found")
+}
+
+func getAppRoot(rootPath string) string {
+	cleanRoot := filepath.Clean(rootPath)
+	if strings.EqualFold(filepath.Base(cleanRoot), "public") {
+		return filepath.Dir(cleanRoot)
+	}
+	return cleanRoot
+}
+
+func isAllowedRootDeletePath(path string) bool {
+	cleanPath := filepath.Clean(path)
+	if cleanPath == "" || cleanPath == "." || cleanPath == string(filepath.Separator) {
+		return false
+	}
+
+	allowedPrefixes := []string{
+		filepath.Clean("/var/www"),
+		filepath.Clean("/home"),
+		filepath.Clean("/srv/www"),
+		filepath.Clean("/opt"),
+	}
+	if runtime.GOOS == "windows" {
+		allowedPrefixes = []string{
+			filepath.Clean("./logs/www"),
+			filepath.Clean("./www"),
+		}
+	}
+
+	for _, prefix := range allowedPrefixes {
+		if cleanPath == prefix || strings.HasPrefix(cleanPath, prefix+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseEnvFile(path string) (map[string]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	values := make(map[string]string)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "export ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		value = strings.Trim(value, `"'`)
+		values[key] = value
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func removeIfExists(path string) error {
+	err := os.Remove(path)
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func removeAllIfExists(path string) error {
+	if !fileExists(path) {
+		return nil
+	}
+	return os.RemoveAll(path)
+}
+
+func dropDatabaseFromEnv(appRoot string) (string, error) {
+	envPath := filepath.Join(appRoot, ".env")
+	envValues, err := parseEnvFile(envPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot read %s: %w", envPath, err)
+	}
+
+	dbName := envValues["DB_DATABASE"]
+	if dbName == "" {
+		return "", fmt.Errorf("DB_DATABASE not found in %s", envPath)
+	}
+	if !dbNamePattern.MatchString(dbName) {
+		return "", fmt.Errorf("database name is not allowed")
+	}
+
+	dbConn := strings.ToLower(envValues["DB_CONNECTION"])
+	if dbConn != "" && dbConn != "mysql" && dbConn != "mariadb" {
+		return "", fmt.Errorf("unsupported DB_CONNECTION: %s", dbConn)
+	}
+
+	dbUser := envValues["DB_USERNAME"]
+	if dbUser == "" {
+		return "", fmt.Errorf("DB_USERNAME not found in %s", envPath)
+	}
+
+	args := []string{"-u", dbUser}
+	if host := envValues["DB_HOST"]; host != "" {
+		args = append(args, "-h", host)
+	}
+	if port := envValues["DB_PORT"]; port != "" {
+		args = append(args, "-P", port)
+	}
+	args = append(args, "-e", fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", dbName))
+
+	cmd := exec.Command("mysql", args...)
+	cmd.Env = os.Environ()
+	if password := envValues["DB_PASSWORD"]; password != "" {
+		cmd.Env = append(cmd.Env, "MYSQL_PWD="+password)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("drop database failed: %s", strings.TrimSpace(string(output)))
+	}
+
+	return dbName, nil
+}
+
+func reloadNginx() error {
+	cmd := exec.Command("systemctl", "reload", "nginx")
+	if output, err := cmd.CombinedOutput(); err == nil {
+		return nil
+	} else if fallbackOutput, fallbackErr := exec.Command("nginx", "-s", "reload").CombinedOutput(); fallbackErr != nil {
+		return fmt.Errorf("systemctl reload nginx failed: %s | nginx -s reload failed: %s", strings.TrimSpace(string(output)), strings.TrimSpace(string(fallbackOutput)))
+	}
+	return nil
+}
+
+func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteResult, error) {
+	result := domainDeleteResult{
+		Domain:     domain,
+		DeleteDB:   deleteDB,
+		DeleteRoot: deleteRoot,
+	}
+
+	configPath, err := findDomainConfigPath(domain)
+	if err != nil {
+		return result, err
+	}
+
+	rootPath, err := parseNginxRoot(configPath)
+	if err == nil {
+		result.RootPath = getAppRoot(rootPath)
+	}
+
+	if deleteRoot {
+		if result.RootPath == "" {
+			return result, fmt.Errorf("cannot detect root path from nginx config")
+		}
+		if !isAllowedRootDeletePath(result.RootPath) {
+			return result, fmt.Errorf("root path is outside allowed delete scope: %s", result.RootPath)
+		}
+	}
+
+	if deleteDB {
+		if result.RootPath == "" {
+			return result, fmt.Errorf("cannot detect app root for database lookup")
+		}
+		dbName, dbErr := dropDatabaseFromEnv(result.RootPath)
+		if dbErr != nil {
+			return result, dbErr
+		}
+		result.Database = dbName
+		result.Deleted = append(result.Deleted, "database:"+dbName)
+	}
+
+	for _, configPath := range getDomainConfigCandidates(domain) {
+		existed := fileExists(configPath)
+		if err := removeIfExists(configPath); err != nil {
+			return result, err
+		}
+		if existed {
+			result.Deleted = append(result.Deleted, configPath)
+		}
+	}
+
+	paths := getDomainPaths()
+	logFiles := []string{
+		filepath.Join(paths.nginxLogDir, domain+"_access.log"),
+		filepath.Join(paths.nginxLogDir, domain+"_error.log"),
+	}
+	for _, logPath := range logFiles {
+		existed := fileExists(logPath)
+		if err := removeIfExists(logPath); err != nil {
+			return result, err
+		}
+		if existed {
+			result.Deleted = append(result.Deleted, logPath)
+		}
+	}
+
+	if err := updateDomainNote(domain, ""); err != nil {
+		return result, err
+	}
+
+	if deleteRoot {
+		if err := removeAllIfExists(result.RootPath); err != nil {
+			return result, err
+		}
+		result.Deleted = append(result.Deleted, result.RootPath)
+	}
+
+	if runtime.GOOS != "windows" {
+		if err := reloadNginx(); err != nil {
+			return result, err
+		}
+		result.NginxReload = true
+	}
+
+	clearDomainCache()
+	return result, nil
 }
 
 func sendTelegram(message string) {
@@ -230,15 +616,16 @@ func getPM2Stats() interface{} {
 }
 
 func getDomains() []DomainInfo {
+	notes := loadDomainNotes()
 	// Trả về cache nếu chưa quá 5 phút
 	if time.Since(lastDomainCheck) < 5*time.Minute && len(cachedDomains) > 0 {
+		for i := range cachedDomains {
+			cachedDomains[i].Note = notes[cachedDomains[i].Domain]
+		}
 		return cachedDomains
 	}
 
-	sitesEnabledDir := "/etc/nginx/sites-enabled/"
-	if runtime.GOOS == "windows" {
-		sitesEnabledDir = "./logs/sites-enabled/"
-	}
+	sitesEnabledDir := getDomainPaths().sitesEnabledDir
 
 	files, err := os.ReadDir(sitesEnabledDir)
 	if err != nil {
@@ -273,7 +660,7 @@ func getDomains() []DomainInfo {
 				code = resp.StatusCode
 				resp.Body.Close()
 			}
-			ch <- resChan{index, DomainInfo{Domain: domain, Status: status, Code: code}}
+			ch <- resChan{index, DomainInfo{Domain: domain, Status: status, Code: code, Note: notes[domain]}}
 		}(i, d)
 	}
 
@@ -311,12 +698,11 @@ func getAllLogs() map[string]interface{} {
 		},
 	}
 
-	nginxDir := "/var/log/nginx/"
-	sitesEnabledDir := "/etc/nginx/sites-enabled/"
-	
+	paths := getDomainPaths()
+	nginxDir := paths.nginxLogDir + string(filepath.Separator)
+	sitesEnabledDir := paths.sitesEnabledDir
+
 	if runtime.GOOS == "windows" {
-		nginxDir = "./logs/nginx/" 
-		sitesEnabledDir = "./logs/sites-enabled/"
 		_ = os.MkdirAll(nginxDir, 0755)
 		_ = os.MkdirAll(sitesEnabledDir, 0755)
 	}
@@ -341,7 +727,7 @@ func getAllLogs() map[string]interface{} {
 	// 2. Also check log directory for other potential logs (fallback)
 	logFiles, _ := os.ReadDir(nginxDir)
 	sitesMap := make(map[string]map[string]gin.H)
-	
+
 	// Pre-fill from sites-enabled
 	for _, d := range domains {
 		sitesMap[d] = make(map[string]gin.H)
@@ -497,14 +883,14 @@ func main() {
 				c.JSON(400, gin.H{"error": "Invalid request"})
 				return
 			}
-			
+
 			services := map[string]string{
-				"nginx": "nginx",
+				"nginx":  "nginx",
 				"php8.3": "php8.3-fpm",
 				"php7.4": "php7.4-fpm",
-				"mysql": "mariadb",
+				"mysql":  "mariadb",
 			}
-			
+
 			target, ok := services[req.Service]
 			if !ok {
 				c.JSON(400, gin.H{"error": "Service not allowed"})
@@ -528,6 +914,70 @@ func main() {
 			c.JSON(200, getDomains())
 		})
 
+		api.POST("/domains/delete", func(c *gin.Context) {
+			var req struct {
+				Domain     string `json:"domain"`
+				DeleteDB   bool   `json:"delete_db"`
+				DeleteRoot bool   `json:"delete_root"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			domain, err := sanitizeDomain(req.Domain)
+			if err != nil {
+				c.JSON(400, gin.H{"error": "Domain is not allowed"})
+				return
+			}
+
+			result, err := deleteDomain(domain, req.DeleteDB, req.DeleteRoot)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{
+				"status":  "ok",
+				"message": fmt.Sprintf("Deleted domain %s", domain),
+				"result":  result,
+			})
+		})
+
+		api.POST("/domains/note", func(c *gin.Context) {
+			var req struct {
+				Domain string `json:"domain"`
+				Note   string `json:"note"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			domain, err := sanitizeDomain(req.Domain)
+			if err != nil {
+				c.JSON(400, gin.H{"error": "Domain is not allowed"})
+				return
+			}
+
+			note := strings.TrimSpace(req.Note)
+			if len(note) > 500 {
+				c.JSON(400, gin.H{"error": "Note is too long"})
+				return
+			}
+
+			if err := updateDomainNote(domain, note); err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{
+				"status": "ok",
+				"domain": domain,
+				"note":   note,
+			})
+		})
+
 		api.POST("/pm2/control", func(c *gin.Context) {
 			var req struct {
 				Name   string `json:"name"`
@@ -537,7 +987,7 @@ func main() {
 				c.JSON(400, gin.H{"error": "Invalid request"})
 				return
 			}
-			
+
 			cmd := exec.Command("pm2", req.Action, req.Name)
 			err := cmd.Run()
 			if err != nil {

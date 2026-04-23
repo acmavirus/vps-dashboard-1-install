@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import {
     Cpu, HardDrive, Wifi, MemoryStick, Clock, Terminal,
     Globe, AlertTriangle, Menu, X, ChevronRight,
-    Play, Square, RotateCcw, Box, Activity
+    Play, Square, RotateCcw, Box, Activity, Trash2
 } from 'lucide-react';
 import {
     AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer
@@ -51,6 +51,18 @@ interface Domain {
     domain: string;
     status: string;
     code: number;
+    note?: string;
+}
+
+interface DomainDeleteState {
+    domain: string;
+    deleteDb: boolean;
+    deleteRoot: boolean;
+}
+
+interface DomainNoteState {
+    domain: string;
+    note: string;
 }
 
 /* ─── Helpers ──────────────────────────────────── */
@@ -70,6 +82,10 @@ export default function App() {
     const [containers, setContainers] = useState<Container[]>([]);
     const [pm2, setPm2] = useState<any[]>([]);
     const [domains, setDomains] = useState<Domain[]>([]);
+    const [domainDelete, setDomainDelete] = useState<DomainDeleteState | null>(null);
+    const [domainDeleteLoading, setDomainDeleteLoading] = useState(false);
+    const [domainNote, setDomainNote] = useState<DomainNoteState | null>(null);
+    const [domainNoteLoading, setDomainNoteLoading] = useState(false);
     const [live, setLive] = useState(false);
     const [logTab, setLogTab] = useState('system');
     const [siteTab, setSiteTab] = useState<'access' | 'error'>('access');
@@ -230,6 +246,73 @@ export default function App() {
             else if (res.status === 401) handleLogout();
             else alert('Failed');
         } catch { alert('Error'); }
+    };
+
+    const handleDeleteDomain = async () => {
+        if (!domainDelete) return;
+        setDomainDeleteLoading(true);
+        try {
+            const res = await fetch('/api/domains/delete', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': token || ''
+                },
+                body: JSON.stringify({
+                    domain: domainDelete.domain,
+                    delete_db: domainDelete.deleteDb,
+                    delete_root: domainDelete.deleteRoot
+                })
+            });
+
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                setDomains(prev => prev.filter(item => item.domain !== domainDelete.domain));
+                setDomainDelete(null);
+                alert(data.message || `Deleted ${domainDelete.domain}`);
+            } else if (res.status === 401) {
+                handleLogout();
+            } else {
+                alert(data.error || 'Delete failed');
+            }
+        } catch {
+            alert('Error');
+        } finally {
+            setDomainDeleteLoading(false);
+        }
+    };
+
+    const handleSaveDomainNote = async () => {
+        if (!domainNote) return;
+        setDomainNoteLoading(true);
+        try {
+            const res = await fetch('/api/domains/note', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': token || ''
+                },
+                body: JSON.stringify({
+                    domain: domainNote.domain,
+                    note: domainNote.note
+                })
+            });
+
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                setDomains(prev => prev.map(item => item.domain === domainNote.domain ? { ...item, note: domainNote.note.trim() } : item));
+                setDomainNote(null);
+                alert('Note saved');
+            } else if (res.status === 401) {
+                handleLogout();
+            } else {
+                alert(data.error || 'Save note failed');
+            }
+        } catch {
+            alert('Error');
+        } finally {
+            setDomainNoteLoading(false);
+        }
     };
 
     const logTabs = [
@@ -563,6 +646,7 @@ export default function App() {
                                     <thead className="bg-secondary/30 text-muted-foreground border-b border-border">
                                         <tr>
                                             <th className="px-6 py-3 font-medium">Domain</th>
+                                            <th className="px-6 py-3 font-medium">Note</th>
                                             <th className="px-6 py-3 font-medium">Status</th>
                                             <th className="px-6 py-3 font-medium">HTTP Code</th>
                                             <th className="px-6 py-3 font-medium">Action</th>
@@ -572,6 +656,9 @@ export default function App() {
                                         {domains.map((d, i) => (
                                             <tr key={i} className="hover:bg-secondary/10">
                                                 <td className="px-6 py-3 font-normal">{d.domain}</td>
+                                                <td className="px-6 py-3 text-muted-foreground max-w-[260px]">
+                                                    <div className="truncate">{d.note || '—'}</div>
+                                                </td>
                                                 <td className="px-6 py-3">
                                                     <div className="flex items-center gap-2">
                                                         <span className={`w-1.5 h-1.5 rounded-full ${d.status === 'online' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
@@ -584,7 +671,32 @@ export default function App() {
                                                     </span>
                                                 </td>
                                                 <td className="px-6 py-3">
-                                                    <a href={`http://${d.domain}`} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">Visit</a>
+                                                    <div className="flex items-center gap-4">
+                                                        <a href={`http://${d.domain}`} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">Visit</a>
+                                                        <a
+                                                            href={`https://www.google.com/search?q=${encodeURIComponent(`site:https://${d.domain}`)}`}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="text-amber-400 hover:underline"
+                                                        >
+                                                            Google
+                                                        </a>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setDomainNote({ domain: d.domain, note: d.note || '' })}
+                                                            className="text-cyan-400 hover:underline"
+                                                        >
+                                                            Edit note
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setDomainDelete({ domain: d.domain, deleteDb: false, deleteRoot: false })}
+                                                            className="inline-flex items-center gap-1.5 text-rose-400 hover:text-rose-300 transition-colors"
+                                                        >
+                                                            <Trash2 size={13} />
+                                                            Delete
+                                                        </button>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         ))}
@@ -673,6 +785,131 @@ export default function App() {
                     </TabsContent>
                 </Tabs>
             </div>
+
+            {domainDelete && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+                    <div className="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl">
+                        <div className="border-b border-border px-6 py-4">
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <h3 className="text-base font-medium text-foreground">Delete domain</h3>
+                                    <p className="mt-1 text-sm text-muted-foreground">{domainDelete.domain}</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => !domainDeleteLoading && setDomainDelete(null)}
+                                    className="text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                    <X size={16} />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4 px-6 py-5">
+                            <p className="text-sm text-muted-foreground">
+                                Domain config và nginx log sẽ bị xóa. Có thể bật thêm xóa database từ file <code>.env</code> và xóa thư mục root theo nginx config.
+                            </p>
+
+                            <label className="flex items-start gap-3 rounded-xl border border-border px-4 py-3">
+                                <input
+                                    type="checkbox"
+                                    checked={domainDelete.deleteDb}
+                                    onChange={(e) => setDomainDelete(prev => prev ? { ...prev, deleteDb: e.target.checked } : prev)}
+                                    className="mt-0.5 h-4 w-4 rounded bg-zinc-800 border-zinc-700"
+                                />
+                                <span>
+                                    <span className="block text-sm text-foreground">Delete database</span>
+                                    <span className="block text-xs text-muted-foreground">Tự dò `DB_DATABASE` từ `.env` của site.</span>
+                                </span>
+                            </label>
+
+                            <label className="flex items-start gap-3 rounded-xl border border-border px-4 py-3">
+                                <input
+                                    type="checkbox"
+                                    checked={domainDelete.deleteRoot}
+                                    onChange={(e) => setDomainDelete(prev => prev ? { ...prev, deleteRoot: e.target.checked } : prev)}
+                                    className="mt-0.5 h-4 w-4 rounded bg-zinc-800 border-zinc-700"
+                                />
+                                <span>
+                                    <span className="block text-sm text-foreground">Delete root folder</span>
+                                    <span className="block text-xs text-muted-foreground">Tự dò root path từ file nginx config của domain.</span>
+                                </span>
+                            </label>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-3 border-t border-border px-6 py-4">
+                            <button
+                                type="button"
+                                onClick={() => setDomainDelete(null)}
+                                disabled={domainDeleteLoading}
+                                className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleDeleteDomain}
+                                disabled={domainDeleteLoading}
+                                className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-50"
+                            >
+                                {domainDeleteLoading ? 'Deleting...' : 'Delete domain'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {domainNote && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+                    <div className="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl">
+                        <div className="border-b border-border px-6 py-4">
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <h3 className="text-base font-medium text-foreground">Edit note</h3>
+                                    <p className="mt-1 text-sm text-muted-foreground">{domainNote.domain}</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => !domainNoteLoading && setDomainNote(null)}
+                                    className="text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                    <X size={16} />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="space-y-4 px-6 py-5">
+                            <textarea
+                                value={domainNote.note}
+                                onChange={(e) => setDomainNote(prev => prev ? { ...prev, note: e.target.value.slice(0, 500) } : prev)}
+                                rows={6}
+                                placeholder="Add a note for this domain..."
+                                className="w-full resize-none rounded-xl border border-border bg-secondary/30 px-4 py-3 text-sm text-foreground outline-none focus:ring-1 focus:ring-cyan-500"
+                            />
+                            <p className="text-right text-xs text-muted-foreground">{domainNote.note.length}/500</p>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-3 border-t border-border px-6 py-4">
+                            <button
+                                type="button"
+                                onClick={() => setDomainNote(null)}
+                                disabled={domainNoteLoading}
+                                className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleSaveDomainNote}
+                                disabled={domainNoteLoading}
+                                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-700 disabled:opacity-50"
+                            >
+                                {domainNoteLoading ? 'Saving...' : 'Save note'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Footer */}
             <footer className="border-t border-border mt-12">
