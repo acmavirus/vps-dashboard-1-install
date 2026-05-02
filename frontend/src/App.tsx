@@ -57,6 +57,7 @@ export default function App() {
   const [domainDeleteLoading, setDomainDeleteLoading] = useState(false)
   const [domainNote, setDomainNote] = useState<DomainNoteState | null>(null)
   const [domainNoteLoading, setDomainNoteLoading] = useState(false)
+  const [domainScanning, setDomainScanning] = useState(false)
   const [appTab, setAppTab] = useState("overview")
   const [live, setLive] = useState(false)
   const [logTab, setLogTab] = useState("system")
@@ -318,6 +319,25 @@ export default function App() {
       alert("Error")
     } finally {
       setDomainNoteLoading(false)
+    }
+  }
+
+  const handleScanDomains = async () => {
+    setDomainScanning(true)
+    try {
+      const response = await fetch("/api/domains?scan=true", {
+        headers: { Authorization: token || "" },
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setDomains(data)
+      } else if (response.status === 401) {
+        handleLogout()
+      }
+    } catch (error) {
+      console.error("Scan error:", error)
+    } finally {
+      setDomainScanning(false)
     }
   }
 
@@ -658,6 +678,8 @@ export default function App() {
                   domains={domains}
                   setDomainDelete={setDomainDelete}
                   setDomainNote={setDomainNote}
+                  onScan={handleScanDomains}
+                  scanning={domainScanning}
                 />
               </TabsContent>
 

@@ -1,23 +1,41 @@
-import { Trash2 } from "lucide-react"
+import { RefreshCw, Trash2 } from "lucide-react"
 
 import type {
   DomainDeleteState,
   DomainInfo,
   DomainNoteState,
 } from "@/components/dashboard/types"
+import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 
 export function DomainsTab({
   domains,
   setDomainDelete,
   setDomainNote,
+  onScan,
+  scanning,
 }: {
   domains: DomainInfo[]
   setDomainDelete: (value: DomainDeleteState) => void
   setDomainNote: (value: DomainNoteState) => void
+  onScan: () => void
+  scanning: boolean
 }) {
   return (
     <Card className="overflow-hidden border-border bg-card">
+      <div className="flex items-center justify-between border-b border-border bg-secondary/10 px-6 py-4">
+        <h3 className="text-sm font-medium">Danh sách Domain</h3>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onScan}
+          disabled={scanning}
+          className="h-8 gap-2 border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/10 hover:text-cyan-300"
+        >
+          <RefreshCw size={14} className={scanning ? "animate-spin" : ""} />
+          {scanning ? "Đang quét..." : "Quét trạng thái"}
+        </Button>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs font-light">
           <thead className="border-b border-border bg-secondary/30 text-muted-foreground">

@@ -615,10 +615,11 @@ func getPM2Stats() interface{} {
 	return data
 }
 
-func getDomains() []DomainInfo {
+func getDomains(scan bool) []DomainInfo {
 	notes := loadDomainNotes()
-	// Trả về cache nếu chưa quá 5 phút
-	if time.Since(lastDomainCheck) < 5*time.Minute && len(cachedDomains) > 0 {
+	
+	// Nếu không yêu cầu quét và đã có cache, trả về cache
+	if !scan && len(cachedDomains) > 0 {
 		for i := range cachedDomains {
 			cachedDomains[i].Note = notes[cachedDomains[i].Domain]
 		}
@@ -626,7 +627,6 @@ func getDomains() []DomainInfo {
 	}
 
 	sitesEnabledDir := getDomainPaths().sitesEnabledDir
-
 	files, err := os.ReadDir(sitesEnabledDir)
 	if err != nil {
 		return []DomainInfo{}
@@ -641,40 +641,56 @@ func getDomains() []DomainInfo {
 	}
 
 	results := make([]DomainInfo, len(domains))
-	type resChan struct {
-		index int
-		info  DomainInfo
-	}
-	ch := make(chan resChan, len(domains))
+	if scan {
+		type resChan struct {
+			index int
+			info  DomainInfo
+		}
+		ch := make(chan resChan, len(domains))
 
-	for i, d := range domains {
-		go func(index int, domain string) {
-			client := http.Client{Timeout: 3 * time.Second}
-			// Chỉ check HTTP HEAD để giảm tải
-			resp, err := client.Head("http://" + domain)
-			status := "online"
+		for i, d := range domains {
+			go func(index int, domain string) {
+				client := http.Client{Timeout: 3 * time.Second}
+				resp, err := client.Head("http://" + domain)
+				status := "online"
+				code := 0
+				if err != nil {
+					status = "offline"
+				} else {
+					code = resp.StatusCode
+					resp.Body.Close()
+				}
+				ch <- resChan{index, DomainInfo{Domain: domain, Status: status, Code: code, Note: notes[domain]}}
+			}(i, d)
+		}
+
+		for i := 0; i < len(domains); i++ {
+			r := <-ch
+			results[r.index] = r.info
+		}
+		lastDomainCheck = time.Now()
+		cachedDomains = results
+	} else {
+		// Chỉ liệt kê, không quét
+		for i, d := range domains {
+			status := "unknown"
 			code := 0
-			if err != nil {
-				status = "offline"
-			} else {
-				code = resp.StatusCode
-				resp.Body.Close()
+			// Thử lấy lại trạng thái từ cache cũ nếu có
+			for _, c := range cachedDomains {
+				if c.Domain == d {
+					status = c.Status
+					code = c.Code
+					break
+				}
 			}
-			ch <- resChan{index, DomainInfo{Domain: domain, Status: status, Code: code, Note: notes[domain]}}
-		}(i, d)
-	}
-
-	for i := 0; i < len(domains); i++ {
-		r := <-ch
-		results[r.index] = r.info
+			results[i] = DomainInfo{Domain: d, Status: status, Code: code, Note: notes[d]}
+		}
 	}
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Domain < results[j].Domain
 	})
 
-	cachedDomains = results
-	lastDomainCheck = time.Now()
 	return results
 }
 
@@ -911,7 +927,8 @@ func main() {
 		})
 
 		api.GET("/domains", func(c *gin.Context) {
-			c.JSON(200, getDomains())
+			scan := c.Query("scan") == "true"
+			c.JSON(200, getDomains(scan))
 		})
 
 		api.POST("/domains/delete", func(c *gin.Context) {
