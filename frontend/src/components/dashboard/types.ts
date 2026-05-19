@@ -1,5 +1,3 @@
-import type { LucideIcon } from "lucide-react"
-
 export interface Stats {
   cpu: number
   ram: number
@@ -84,6 +82,6 @@ export interface DomainNoteState {
 export interface LogTabItem {
   key: string
   label: string
-  icon: LucideIcon
+  icon: any
   color: string
 }

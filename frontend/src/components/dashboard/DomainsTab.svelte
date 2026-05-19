@@ -1,0 +1,384 @@
+<script lang="ts">
+  import { RefreshCw, Trash2, Plus, X, Globe, ShieldCheck, Database, ArrowRight, Loader2 } from "lucide-svelte"
+  import type { DomainInfo, DomainDeleteState, DomainNoteState } from "./types"
+
+  export let token: string | null = null
+  export let domains: DomainInfo[] = []
+  export let setDomainDelete: (value: DomainDeleteState) => void
+  export let setDomainNote: (value: DomainNoteState) => void
+  export let onScan: () => void
+  export let scanning: boolean
+  export let onRefresh: () => void
+
+  // Create website states
+  let showCreateModal = false
+  let createLoading = false
+  let createError = ""
+  let createSuccess = ""
+
+  let domainName = ""
+  let websiteType = "php" // "static", "php", "proxy"
+  let phpVersion = "8.3" // "8.3", "7.4"
+  let proxyPass = "http://127.0.0.1:3000"
+  let createDb = false
+  let enableSSL = false
+
+  async function handleCreateWebsite(e: Event) {
+    e.preventDefault()
+    createError = ""
+    createSuccess = ""
+    
+    // Simple validation
+    const domainClean = domainName.trim().toLowerCase()
+    if (!domainClean) {
+      createError = "Domain name cannot be empty"
+      return
+    }
+
+    createLoading = true
+
+    try {
+      const response = await fetch("/api/domains/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token || "",
+        },
+        body: JSON.stringify({
+          domain: domainClean,
+          type: websiteType,
+          php_version: phpVersion,
+          proxy_pass: proxyPass.trim(),
+          create_db: createDb,
+          ssl: enableSSL
+        }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+
+      if (response.ok) {
+        createSuccess = `Website ${domainClean} created successfully!`
+        // Clear form
+        domainName = ""
+        createDb = false
+        enableSSL = false
+        // Refresh domains list
+        onRefresh()
+        // Wait 1.5 seconds then close modal
+        setTimeout(() => {
+          showCreateModal = false
+          createSuccess = ""
+        }, 1500)
+      } else {
+        createError = data.error || "Failed to create website"
+      }
+    } catch {
+      createError = "Connection error"
+    } finally {
+      createLoading = false
+    }
+  }
+</script>
+
+<div class="space-y-4">
+  <!-- Table Header Controls -->
+  <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div>
+      <h2 class="text-lg font-medium text-foreground">Quản lý Website</h2>
+      <p class="text-xs text-muted-foreground">Cấu hình Nginx, PHP, Reverse Proxy và SSL Let's Encrypt</p>
+    </div>
+    
+    <div class="flex items-center gap-2 w-full sm:w-auto">
+      <button
+        on:click={onScan}
+        disabled={scanning}
+        class="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-border bg-card px-4 text-xs font-medium text-muted-foreground hover:bg-secondary/40 hover:text-foreground disabled:opacity-50"
+      >
+        <RefreshCw size={14} class={scanning ? "animate-spin" : ""} />
+        <span>{scanning ? "Đang quét..." : "Quét trạng thái"}</span>
+      </button>
+
+      <button
+        on:click={() => showCreateModal = true}
+        class="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-xs font-medium text-white transition-colors hover:bg-blue-700 w-full sm:w-auto"
+      >
+        <Plus size={15} />
+        <span>Thêm Website</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Website List Card -->
+  <div class="rounded-xl border border-border bg-card overflow-hidden shadow-sm">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs font-light">
+        <thead class="border-b border-border bg-secondary/30 text-muted-foreground">
+          <tr>
+            <th class="px-6 py-3 font-medium">Domain</th>
+            <th class="px-6 py-3 font-medium">Note / Database Info</th>
+            <th class="px-6 py-3 font-medium">Status</th>
+            <th class="px-6 py-3 font-medium">HTTP Code</th>
+            <th class="px-6 py-3 font-medium text-right">Action</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border">
+          {#if domains.length === 0}
+            <tr>
+              <td colspan="5" class="px-6 py-10 text-center text-muted-foreground font-light">
+                Chưa có website nào được thêm. Bấm "Thêm Website" để bắt đầu.
+              </td>
+            </tr>
+          {/if}
+          {#each domains as domain, index (`${domain.domain}-${index}`)}
+            <tr class="hover:bg-secondary/10">
+              <td class="px-6 py-4 font-normal">
+                <div class="flex items-center gap-2">
+                  <Globe size={14} class="text-muted-foreground" />
+                  <span class="font-medium text-foreground">{domain.domain}</span>
+                </div>
+              </td>
+              <td class="max-w-[320px] px-6 py-4 text-muted-foreground whitespace-pre-line leading-relaxed">
+                {domain.note || "--"}
+              </td>
+              <td class="px-6 py-4">
+                <div class="flex items-center gap-2">
+                  <span
+                    class="h-1.5 w-1.5 rounded-full {domain.status === 'online' ? 'bg-emerald-500' : domain.status === 'offline' ? 'bg-rose-500' : 'bg-zinc-500'}"
+                  />
+                  <span class="capitalize font-light">{domain.status}</span>
+                </div>
+              </td>
+              <td class="px-6 py-4 tabular-nums">
+                <span class={domain.code >= 200 && domain.code < 400 ? "text-emerald-400 font-medium" : "text-rose-400 font-medium"}>
+                  {domain.code || "--"}
+                </span>
+              </td>
+              <td class="px-6 py-4 text-right">
+                <div class="flex items-center justify-end gap-3.5">
+                  <a
+                    href={`http://${domain.domain}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    class="text-blue-400 hover:text-blue-300 font-medium"
+                  >
+                    Truy cập
+                  </a>
+                  <a
+                    href={`https://www.google.com/search?q=${encodeURIComponent(`site:https://${domain.domain}`)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    class="text-amber-400 hover:text-amber-300 font-medium"
+                  >
+                    Google
+                  </a>
+                  <button
+                    type="button"
+                    on:click={() => setDomainNote({ domain: domain.domain, note: domain.note || "" })}
+                    class="text-cyan-400 hover:text-cyan-300 font-medium"
+                  >
+                    Ghi chú
+                  </button>
+                  <button
+                    type="button"
+                    on:click={() => setDomainDelete({ domain: domain.domain, deleteDb: false, deleteRoot: false })}
+                    class="inline-flex items-center gap-1 text-rose-400 hover:text-rose-300 transition-colors font-medium"
+                  >
+                    <Trash2 size={13} />
+                    <span>Xóa</span>
+                  </button>
+                </div>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Create Website Modal -->
+  {#if showCreateModal}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+      <div class="w-full max-w-lg rounded-2xl border border-border bg-card shadow-2xl overflow-hidden transform transition-all">
+        <!-- Modal Header -->
+        <div class="flex items-center justify-between border-b border-border px-6 py-4">
+          <div>
+            <h3 class="text-base font-medium text-foreground">Thêm Website mới</h3>
+            <p class="text-xs text-muted-foreground">Tạo cấu hình Nginx, cấp phát root folder & DB</p>
+          </div>
+          <button
+            type="button"
+            on:click={() => !createLoading && (showCreateModal = false)}
+            class="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <!-- Modal Form -->
+        <form on:submit={handleCreateWebsite}>
+          <div class="space-y-4 p-6">
+            <!-- Domain Name Input -->
+            <div class="space-y-2">
+              <label for="domainName" class="text-xs font-light text-muted-foreground">Tên Domain</label>
+              <input
+                id="domainName"
+                type="text"
+                bind:value={domainName}
+                class="w-full rounded-lg border border-border bg-secondary/30 px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="example.com hoặc shop.thuc.me"
+                required
+                disabled={createLoading}
+              />
+            </div>
+
+            <!-- Website Type Select -->
+            <div class="space-y-2">
+              <!-- svelte-ignore a11y-label-has-associated-control -->
+              <label class="text-xs font-light text-muted-foreground">Loại Website</label>
+              <div class="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  on:click={() => { websiteType = "static"; createDb = false; }}
+                  class="flex flex-col items-center gap-1 rounded-xl border p-3 text-center transition-all {websiteType === 'static' ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-border bg-secondary/10 hover:bg-secondary/20 text-muted-foreground'}"
+                  disabled={createLoading}
+                >
+                  <Globe size={18} />
+                  <span class="text-[10px] font-medium">Static (HTML)</span>
+                </button>
+
+                <button
+                  type="button"
+                  on:click={() => websiteType = "php"}
+                  class="flex flex-col items-center gap-1 rounded-xl border p-3 text-center transition-all {websiteType === 'php' ? 'border-indigo-500 bg-indigo-500/10 text-indigo-400' : 'border-border bg-secondary/10 hover:bg-secondary/20 text-muted-foreground'}"
+                  disabled={createLoading}
+                >
+                  <Database size={18} />
+                  <span class="text-[10px] font-medium">PHP Application</span>
+                </button>
+
+                <button
+                  type="button"
+                  on:click={() => { websiteType = "proxy"; createDb = false; }}
+                  class="flex flex-col items-center gap-1 rounded-xl border p-3 text-center transition-all {websiteType === 'proxy' ? 'border-orange-500 bg-orange-500/10 text-orange-400' : 'border-border bg-secondary/10 hover:bg-secondary/20 text-muted-foreground'}"
+                  disabled={createLoading}
+                >
+                  <ArrowRight size={18} />
+                  <span class="text-[10px] font-medium">Reverse Proxy</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- PHP Version Select (Only if Type == php) -->
+            {#if websiteType === "php"}
+              <div class="space-y-2">
+                <!-- svelte-ignore a11y-label-has-associated-control -->
+                <label class="text-xs font-light text-muted-foreground">Phiên bản PHP</label>
+                <div class="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    on:click={() => phpVersion = "8.3"}
+                    class="rounded-lg border py-2 text-center text-xs transition-all {phpVersion === '8.3' ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-border bg-secondary/10 text-muted-foreground'}"
+                    disabled={createLoading}
+                  >
+                    PHP 8.3 (Mặc định)
+                  </button>
+                  <button
+                    type="button"
+                    on:click={() => phpVersion = "7.4"}
+                    class="rounded-lg border py-2 text-center text-xs transition-all {phpVersion === '7.4' ? 'border-blue-500 bg-blue-500/10 text-blue-400' : 'border-border bg-secondary/10 text-muted-foreground'}"
+                    disabled={createLoading}
+                  >
+                    PHP 7.4
+                  </button>
+                </div>
+              </div>
+            {/if}
+
+            <!-- Proxy Pass Target (Only if Type == proxy) -->
+            {#if websiteType === "proxy"}
+              <div class="space-y-2">
+                <label for="proxyPass" class="text-xs font-light text-muted-foreground">Proxy Destination (Nơi chuyển tiếp)</label>
+                <input
+                  id="proxyPass"
+                  type="text"
+                  bind:value={proxyPass}
+                  class="w-full rounded-lg border border-border bg-secondary/30 px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  placeholder="http://127.0.0.1:3000"
+                  required
+                  disabled={createLoading}
+                />
+              </div>
+            {/if}
+
+            <!-- Checkboxes: Create DB & SSL -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+              {#if websiteType === "php"}
+                <!-- svelte-ignore a11y-label-has-associated-control -->
+                <label class="flex items-center gap-3 rounded-xl border border-border bg-secondary/10 px-4 py-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    bind:checked={createDb}
+                    class="h-4 w-4 rounded border-zinc-700 bg-zinc-800 focus:ring-1 focus:ring-blue-500"
+                    disabled={createLoading}
+                  />
+                  <div class="flex flex-col">
+                    <span class="text-xs font-medium text-foreground">Tạo Database</span>
+                    <span class="text-[9px] text-muted-foreground">Sinh DB & User tự động</span>
+                  </div>
+                </label>
+              {/if}
+
+              <!-- svelte-ignore a11y-label-has-associated-control -->
+              <label class="flex items-center gap-3 rounded-xl border border-border bg-secondary/10 px-4 py-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  bind:checked={enableSSL}
+                  class="h-4 w-4 rounded border-zinc-700 bg-zinc-800 focus:ring-1 focus:ring-blue-500"
+                  disabled={createLoading}
+                />
+                <div class="flex flex-col">
+                  <span class="text-xs font-medium text-foreground flex items-center gap-1">
+                    SSL Let's Encrypt <ShieldCheck size={11} class="text-emerald-400" />
+                  </span>
+                  <span class="text-[9px] text-muted-foreground">Tự động cấu hình HTTPS</span>
+                </div>
+              </label>
+            </div>
+
+            <!-- Messages -->
+            {#if createError}
+              <p class="text-xs text-rose-400 text-center bg-rose-500/10 border border-rose-500/20 py-2 rounded-lg">{createError}</p>
+            {/if}
+            {#if createSuccess}
+              <p class="text-xs text-emerald-400 text-center bg-emerald-500/10 border border-emerald-500/20 py-2 rounded-lg">{createSuccess}</p>
+            {/if}
+          </div>
+
+          <!-- Modal Footer -->
+          <div class="flex items-center justify-end gap-3 border-t border-border px-6 py-4">
+            <button
+              type="button"
+              on:click={() => showCreateModal = false}
+              disabled={createLoading}
+              class="rounded-lg border border-border px-4 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-50"
+            >
+              Hủy bỏ
+            </button>
+            <button
+              type="submit"
+              disabled={createLoading || !!createSuccess}
+              class="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 text-xs font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            >
+              {#if createLoading}
+                <Loader2 size={13} class="animate-spin" />
+                <span>Đang xử lý...</span>
+              {:else}
+                <span>Tạo Website</span>
+              {/if}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
+</div>

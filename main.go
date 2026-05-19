@@ -373,6 +373,45 @@ func dropDatabaseFromEnv(appRoot string) (string, error) {
 	return dbName, nil
 }
 
+func provisionCMSDatabase(prefix string) (string, string, string, error) {
+	dbConfig, err := loadDBConfig()
+	if err != nil || dbConfig.Host == "" {
+		return "", "", "", fmt.Errorf("Please configure database credentials in the Databases tab first.")
+	}
+
+	// Automatically fix firewall and MariaDB bind-address on Host to allow Docker connection
+	fixHostDatabaseForDocker()
+
+	suffix := strings.ToLower(generateRandomString(6))
+	dbName := fmt.Sprintf("%s_%s", prefix, suffix)
+	dbUser := fmt.Sprintf("%s_u_%s", prefix, suffix)
+	dbPass := generateRandomString(14)
+
+	// Create database
+	_, err = runSQLCommand(fmt.Sprintf("CREATE DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;", dbName))
+	if err != nil {
+		return "", "", "", fmt.Errorf("Failed to create database: %w", err)
+	}
+
+	// Create user
+	_, err = runSQLCommand(fmt.Sprintf("CREATE USER '%s'@'%%' IDENTIFIED BY '%s';", dbUser, dbPass))
+	if err != nil {
+		_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", dbName))
+		return "", "", "", fmt.Errorf("Failed to create database user: %w", err)
+	}
+
+	// Grant privileges
+	_, err = runSQLCommand(fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%%';", dbName, dbUser))
+	if err != nil {
+		_, _ = runSQLCommand(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%';", dbUser))
+		_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", dbName))
+		return "", "", "", fmt.Errorf("Failed to grant privileges: %w", err)
+	}
+
+	_, _ = runSQLCommand("FLUSH PRIVILEGES;")
+	return dbName, dbUser, dbPass, nil
+}
+
 func reloadNginx() error {
 	cmd := exec.Command("systemctl", "reload", "nginx")
 	if output, err := cmd.CombinedOutput(); err == nil {
@@ -388,6 +427,73 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 		Domain:     domain,
 		DeleteDB:   deleteDB,
 		DeleteRoot: deleteRoot,
+	}
+
+	// Check if this domain belongs to a Docker App Store instance
+	metaList, _ := loadAppsMetadata()
+	var dockerApp *AppMetadata
+	for _, m := range metaList {
+		if m.Domain == domain {
+			dockerApp = &m
+			break
+		}
+	}
+
+	if dockerApp != nil {
+		// 1. Remove docker container
+		_ = exec.Command("docker", "rm", "-f", dockerApp.ID).Run()
+		// 2. Remove docker volume
+		_ = exec.Command("docker", "volume", "rm", dockerApp.ID+"_data").Run()
+		result.Deleted = append(result.Deleted, "docker-container:"+dockerApp.ID)
+		result.Deleted = append(result.Deleted, "docker-volume:"+dockerApp.ID+"_data")
+
+		// 3. Drop DB and DB user
+		if dockerApp.DBName != "" {
+			_, _ = runSQLCommand(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%';", dockerApp.DBUser))
+			_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", dockerApp.DBName))
+			_, _ = runSQLCommand("FLUSH PRIVILEGES;")
+			result.Database = dockerApp.DBName
+			result.Deleted = append(result.Deleted, "database:"+dockerApp.DBName)
+		}
+
+		// 4. Remove Nginx configuration files
+		for _, configPath := range getDomainConfigCandidates(domain) {
+			existed := fileExists(configPath)
+			if err := removeIfExists(configPath); err == nil && existed {
+				result.Deleted = append(result.Deleted, configPath)
+			}
+		}
+
+		// 5. Remove log files
+		paths := getDomainPaths()
+		logFiles := []string{
+			filepath.Join(paths.nginxLogDir, domain+"_access.log"),
+			filepath.Join(paths.nginxLogDir, domain+"_error.log"),
+		}
+		for _, logPath := range logFiles {
+			existed := fileExists(logPath)
+			if err := removeIfExists(logPath); err == nil && existed {
+				result.Deleted = append(result.Deleted, logPath)
+			}
+		}
+
+		// 6. Remove note & metadata entry
+		_ = updateDomainNote(domain, "")
+		var remainingMeta []AppMetadata
+		for _, item := range metaList {
+			if item.Domain != domain {
+				remainingMeta = append(remainingMeta, item)
+			}
+		}
+		_ = saveAppsMetadata(remainingMeta)
+
+		// 7. Reload Nginx
+		if runtime.GOOS != "windows" {
+			_ = reloadNginx()
+			result.NginxReload = true
+		}
+		clearDomainCache()
+		return result, nil
 	}
 
 	configPath, err := findDomainConfigPath(domain)
@@ -410,15 +516,41 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 	}
 
 	if deleteDB {
-		if result.RootPath == "" {
-			return result, fmt.Errorf("cannot detect app root for database lookup")
+		notes := loadDomainNotes()
+		note := notes[domain]
+		var noteDBName, noteDBUser string
+		for _, l := range strings.Split(note, "\n") {
+			l = strings.TrimSpace(l)
+			if strings.HasPrefix(l, "Database:") {
+				noteDBName = strings.TrimSpace(strings.TrimPrefix(l, "Database:"))
+			} else if strings.HasPrefix(l, "User:") {
+				noteDBUser = strings.TrimSpace(strings.TrimPrefix(l, "User:"))
+			}
 		}
-		dbName, dbErr := dropDatabaseFromEnv(result.RootPath)
-		if dbErr != nil {
-			return result, dbErr
+
+		if noteDBName != "" {
+			if dbNamePattern.MatchString(noteDBName) {
+				if noteDBUser != "" {
+					_, _ = runSQLCommand(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%';", noteDBUser))
+				}
+				_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", noteDBName))
+				_, _ = runSQLCommand("FLUSH PRIVILEGES;")
+				result.Database = noteDBName
+				result.Deleted = append(result.Deleted, "database:"+noteDBName)
+			}
+		} else {
+			if result.RootPath != "" {
+				envPath := filepath.Join(result.RootPath, ".env")
+				if fileExists(envPath) {
+					dbName, dbErr := dropDatabaseFromEnv(result.RootPath)
+					if dbErr != nil {
+						return result, dbErr
+					}
+					result.Database = dbName
+					result.Deleted = append(result.Deleted, "database:"+dbName)
+				}
+			}
 		}
-		result.Database = dbName
-		result.Deleted = append(result.Deleted, "database:"+dbName)
 	}
 
 	for _, configPath := range getDomainConfigCandidates(domain) {
@@ -961,6 +1093,190 @@ func main() {
 			})
 		})
 
+		api.POST("/domains/create", func(c *gin.Context) {
+			var req struct {
+				Domain      string `json:"domain"`
+				Type        string `json:"type"`          // "static", "php", "proxy"
+				PHPVersion  string `json:"php_version"`   // "8.3", "7.4"
+				ProxyPass   string `json:"proxy_pass"`    // e.g. http://127.0.0.1:8080
+				CreateDB    bool   `json:"create_db"`
+				SSL         bool   `json:"ssl"`
+			}
+
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			domain, err := sanitizeDomain(req.Domain)
+			if err != nil {
+				c.JSON(400, gin.H{"error": "Invalid domain format"})
+				return
+			}
+
+			// Check if Nginx config already exists for this domain
+			paths := getDomainPaths()
+			availablePath := filepath.Join(paths.sitesAvailableDir, domain+".conf")
+			enabledPath := filepath.Join(paths.sitesEnabledDir, domain+".conf")
+
+			if fileExists(availablePath) || fileExists(enabledPath) {
+				c.JSON(400, gin.H{"error": "Website / Domain configuration already exists"})
+				return
+			}
+
+			var noteContent []string
+
+			// Handle directories and sample files if static/php
+			if req.Type == "static" || req.Type == "php" {
+				webRoot := filepath.Join("/var/www", domain)
+				if runtime.GOOS == "windows" {
+					webRoot = filepath.Join(".", "logs", "www", domain)
+				}
+
+				if err := os.MkdirAll(webRoot, 0755); err != nil {
+					c.JSON(500, gin.H{"error": "Failed to create web root directory: " + err.Error()})
+					return
+				}
+
+				if req.Type == "static" {
+					indexPath := filepath.Join(webRoot, "index.html")
+					if !fileExists(indexPath) {
+						defaultHTML := fmt.Sprintf("<!DOCTYPE html><html><head><title>Welcome to %s</title></head><body style='font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0f172a; color: #f1f5f9;'><div><h1>%s has been successfully configured!</h1><p>Website is running under Static HTML mode.</p></div></body></html>", domain, domain)
+						_ = os.WriteFile(indexPath, []byte(defaultHTML), 0644)
+					}
+				} else if req.Type == "php" {
+					indexPath := filepath.Join(webRoot, "index.php")
+					if !fileExists(indexPath) {
+						defaultPHP := fmt.Sprintf("<?php\necho '<h1>Welcome to %s</h1>';\necho '<p>Website is running under PHP Mode (PHP Version: %s)</p>';\nphpinfo();", domain, req.PHPVersion)
+						_ = os.WriteFile(indexPath, []byte(defaultPHP), 0644)
+					}
+				}
+			}
+
+			// Handle Database Provisioning
+			var dbName, dbUser, dbPass string
+			if req.CreateDB {
+				prefix := strings.ReplaceAll(domain, ".", "_")
+				if len(prefix) > 10 {
+					prefix = prefix[:10]
+				}
+				var dbErr error
+				dbName, dbUser, dbPass, dbErr = provisionCMSDatabase(prefix)
+				if dbErr != nil {
+					c.JSON(500, gin.H{"error": "Database provisioning failed: " + dbErr.Error()})
+					return
+				}
+				noteContent = append(noteContent, fmt.Sprintf("Database: %s\nUser: %s\nPass: %s", dbName, dbUser, dbPass))
+			}
+
+			// Generate Nginx Configuration
+			var nginxConfig string
+			if req.Type == "static" {
+				webRoot := filepath.Join("/var/www", domain)
+				nginxConfig = fmt.Sprintf(`server {
+    listen 80;
+    server_name %s;
+    root %s;
+    index index.html index.htm;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+`, domain, webRoot)
+			} else if req.Type == "php" {
+				webRoot := filepath.Join("/var/www", domain)
+				sockPath := "/run/php/php8.3-fpm.sock"
+				if req.PHPVersion == "7.4" {
+					sockPath = "/run/php/php7.4-fpm.sock"
+				}
+				nginxConfig = fmt.Sprintf(`server {
+    listen 80;
+    server_name %s;
+    root %s;
+    index index.php index.html index.htm;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:%s;
+    }
+}
+`, domain, webRoot, sockPath)
+			} else if req.Type == "proxy" {
+				nginxConfig = fmt.Sprintf(`server {
+    listen 80;
+    server_name %s;
+
+    location / {
+        proxy_pass %s;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+`, domain, req.ProxyPass)
+			} else {
+				c.JSON(400, gin.H{"error": "Invalid website type"})
+				return
+			}
+
+			// Write configuration file
+			if err := os.MkdirAll(filepath.Dir(availablePath), 0755); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to create nginx config directory: " + err.Error()})
+				return
+			}
+			if err := os.WriteFile(availablePath, []byte(nginxConfig), 0644); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to write nginx available config: " + err.Error()})
+				return
+			}
+
+			// Symlink config
+			if err := os.MkdirAll(filepath.Dir(enabledPath), 0755); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to create nginx enabled directory: " + err.Error()})
+				return
+			}
+			_ = os.Remove(enabledPath)
+			if err := os.Symlink(availablePath, enabledPath); err != nil {
+				if runtime.GOOS != "windows" {
+					c.JSON(500, gin.H{"error": "Failed to symlink nginx configuration: " + err.Error()})
+					return
+				}
+			}
+
+			// Save DB Note
+			if len(noteContent) > 0 {
+				noteStr := strings.Join(noteContent, "\n")
+				_ = updateDomainNote(domain, noteStr)
+			}
+
+			// Reload Nginx
+			if runtime.GOOS != "windows" {
+				if err := reloadNginx(); err != nil {
+					c.JSON(500, gin.H{"error": "Failed to reload Nginx: " + err.Error()})
+					return
+				}
+				if req.SSL {
+					runCertbot(domain)
+				}
+			}
+
+			clearDomainCache()
+
+			c.JSON(200, gin.H{
+				"status":  "ok",
+				"message": "Website created successfully",
+			})
+		})
+
 		api.POST("/domains/note", func(c *gin.Context) {
 			var req struct {
 				Domain string `json:"domain"`
@@ -1014,6 +1330,1044 @@ func main() {
 			c.JSON(200, gin.H{"status": "ok"})
 		})
 
+		// Firewall Endpoints
+		api.GET("/firewall", func(c *gin.Context) {
+			c.JSON(200, getFirewallStatus())
+		})
+
+		api.POST("/firewall/toggle", func(c *gin.Context) {
+			var req struct {
+				Enabled bool `json:"enabled"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			var cmd *exec.Cmd
+			if req.Enabled {
+				cmd = exec.Command("ufw", "--force", "enable")
+			} else {
+				cmd = exec.Command("ufw", "disable")
+			}
+
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error(), "details": string(output)})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok", "message": string(output)})
+		})
+
+		api.POST("/firewall/rules", func(c *gin.Context) {
+			var req struct {
+				Port     string `json:"port"`
+				Protocol string `json:"protocol"` // tcp, udp, all
+				Action   string `json:"action"`   // allow, deny
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			portRegex := regexp.MustCompile(`^[0-9:-]+$`)
+			if !portRegex.MatchString(req.Port) {
+				c.JSON(400, gin.H{"error": "Invalid port format"})
+				return
+			}
+
+			action := strings.ToLower(req.Action)
+			if action != "allow" && action != "deny" {
+				c.JSON(400, gin.H{"error": "Invalid action, must be allow or deny"})
+				return
+			}
+
+			var arg string
+			proto := strings.ToLower(req.Protocol)
+			if proto == "all" || proto == "" {
+				arg = req.Port
+			} else if proto == "tcp" || proto == "udp" {
+				arg = fmt.Sprintf("%s/%s", req.Port, proto)
+			} else {
+				c.JSON(400, gin.H{"error": "Invalid protocol, must be tcp, udp, or all"})
+				return
+			}
+
+			cmd := exec.Command("ufw", action, arg)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error(), "details": string(output)})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok", "message": string(output)})
+		})
+
+		api.DELETE("/firewall/rules/:index", func(c *gin.Context) {
+			indexStr := c.Param("index")
+			var index int
+			if _, err := fmt.Sscanf(indexStr, "%d", &index); err != nil || index <= 0 {
+				c.JSON(400, gin.H{"error": "Invalid index parameter"})
+				return
+			}
+
+			cmd := exec.Command("ufw", "--force", "delete", indexStr)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error(), "details": string(output)})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok", "message": string(output)})
+		})
+
+		// File Manager Endpoints
+		api.GET("/files", func(c *gin.Context) {
+			path := c.Query("path")
+			if path == "" {
+				path = "/"
+			}
+			path = filepath.Clean(path)
+
+			// Ensure path exists and is a directory
+			info, err := os.Stat(path)
+			if err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+			if !info.IsDir() {
+				c.JSON(400, gin.H{"error": "Path is not a directory"})
+				return
+			}
+
+			entries, err := os.ReadDir(path)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			var files []FileInfo
+			for _, entry := range entries {
+				info, err := entry.Info()
+				if err != nil {
+					continue
+				}
+				files = append(files, FileInfo{
+					Name:    entry.Name(),
+					Size:    info.Size(),
+					IsDir:   entry.IsDir(),
+					ModTime: info.ModTime(),
+					Mode:    info.Mode().String(),
+				})
+			}
+
+			// Sort directories first, then files
+			sort.Slice(files, func(i, j int) bool {
+				if files[i].IsDir && !files[j].IsDir {
+					return true
+				}
+				if !files[i].IsDir && files[j].IsDir {
+					return false
+				}
+				return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name)
+			})
+
+			c.JSON(200, gin.H{
+				"current_path": path,
+				"files":        files,
+			})
+		})
+
+		api.GET("/files/read", func(c *gin.Context) {
+			path := c.Query("path")
+			if path == "" {
+				c.JSON(400, gin.H{"error": "Path is required"})
+				return
+			}
+			path = filepath.Clean(path)
+
+			info, err := os.Stat(path)
+			if err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+			if info.IsDir() {
+				c.JSON(400, gin.H{"error": "Cannot read directory as text file"})
+				return
+			}
+			if info.Size() > 5*1024*1024 {
+				c.JSON(400, gin.H{"error": "File size exceeds 5MB limit for editor"})
+				return
+			}
+
+			content, err := os.ReadFile(path)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{
+				"path":    path,
+				"content": string(content),
+			})
+		})
+
+		api.POST("/files/write", func(c *gin.Context) {
+			var req struct {
+				Path    string `json:"path"`
+				Content string `json:"content"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+			path := filepath.Clean(req.Path)
+
+			err := os.WriteFile(path, []byte(req.Content), 0644)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/files/create", func(c *gin.Context) {
+			var req struct {
+				Path  string `json:"path"`
+				IsDir bool   `json:"is_dir"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+			path := filepath.Clean(req.Path)
+
+			if req.IsDir {
+				err := os.MkdirAll(path, 0755)
+				if err != nil {
+					c.JSON(500, gin.H{"error": err.Error()})
+					return
+				}
+			} else {
+				file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0644)
+				if err != nil {
+					c.JSON(500, gin.H{"error": err.Error()})
+					return
+				}
+				file.Close()
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/files/delete", func(c *gin.Context) {
+			var req struct {
+				Path string `json:"path"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+			path := filepath.Clean(req.Path)
+
+			// Safety checks
+			if path == "/" || path == "/root" || path == "/etc" || path == "/bin" || path == "/usr" || path == "/var" {
+				c.JSON(400, gin.H{"error": "Deleting critical system directories is blocked for safety"})
+				return
+			}
+
+			err := os.RemoveAll(path)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/files/rename", func(c *gin.Context) {
+			var req struct {
+				OldPath string `json:"old_path"`
+				NewPath string `json:"new_path"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+			oldPath := filepath.Clean(req.OldPath)
+			newPath := filepath.Clean(req.NewPath)
+
+			if oldPath == "/" || newPath == "/" {
+				c.JSON(400, gin.H{"error": "Renaming root directory is blocked"})
+				return
+			}
+
+			err := os.Rename(oldPath, newPath)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		// Database Endpoints
+		api.GET("/databases", func(c *gin.Context) {
+			config, err := loadDBConfig()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			configured := config.Host != ""
+			
+			var list []string
+			if configured {
+				out, err := runSQLCommand("SHOW DATABASES;")
+				if err != nil {
+					c.JSON(200, gin.H{
+						"configured":   configured,
+						"host":         config.Host,
+						"port":         config.Port,
+						"username":     config.Username,
+						"has_password": config.Password != "",
+						"error":        err.Error(),
+						"databases":    []string{},
+					})
+					return
+				}
+				lines := strings.Split(out, "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if line == "" || line == "Database" {
+						continue
+					}
+					// Skip system databases
+					if line == "information_schema" || line == "performance_schema" || line == "mysql" || line == "sys" {
+						continue
+					}
+					list = append(list, line)
+				}
+			}
+
+			c.JSON(200, gin.H{
+				"configured":   configured,
+				"host":         config.Host,
+				"port":         config.Port,
+				"username":     config.Username,
+				"has_password": config.Password != "",
+				"databases":    list,
+			})
+		})
+
+		api.POST("/databases/config", func(c *gin.Context) {
+			var req struct {
+				Host     string `json:"host"`
+				Port     string `json:"port"`
+				Username string `json:"username"`
+				Password string `json:"password"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			if req.Host == "" || req.Port == "" || req.Username == "" {
+				c.JSON(400, gin.H{"error": "Host, Port, and Username are required"})
+				return
+			}
+
+			config := DBConfig{
+				Host:     req.Host,
+				Port:     req.Port,
+				Username: req.Username,
+				Password: req.Password,
+			}
+
+			// Test connection
+			args := []string{"-h", config.Host, "-P", config.Port, "-u", config.Username, "-e", "SELECT 1;"}
+			cmd := exec.Command("mysql", args...)
+			cmd.Env = os.Environ()
+			if config.Password != "" {
+				cmd.Env = append(cmd.Env, "MYSQL_PWD="+config.Password)
+			}
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				c.JSON(400, gin.H{"error": fmt.Sprintf("Connection test failed: %s", strings.TrimSpace(string(output)))})
+				return
+			}
+
+			err = saveDBConfig(config)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/databases", func(c *gin.Context) {
+			var req struct {
+				Name       string `json:"name"`
+				CreateUser bool   `json:"create_user"`
+				Username   string `json:"username"`
+				Password   string `json:"password"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			dbNamePattern := regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+			if !dbNamePattern.MatchString(req.Name) {
+				c.JSON(400, gin.H{"error": "Database name must be alphanumeric and underscore only"})
+				return
+			}
+
+			// 1. Create database
+			_, err := runSQLCommand(fmt.Sprintf("CREATE DATABASE `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;", req.Name))
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			// 2. Create user if requested
+			if req.CreateUser {
+				if !dbNamePattern.MatchString(req.Username) {
+					_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE `%s`;", req.Name))
+					c.JSON(400, gin.H{"error": "Username must be alphanumeric and underscore only"})
+					return
+				}
+				if req.Password == "" {
+					_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE `%s`;", req.Name))
+					c.JSON(400, gin.H{"error": "Password cannot be empty"})
+					return
+				}
+
+				escapedPassword := strings.ReplaceAll(req.Password, "'", "''")
+
+				_, err = runSQLCommand(fmt.Sprintf("CREATE USER '%s'@'%%' IDENTIFIED BY '%s';", req.Username, escapedPassword))
+				if err != nil {
+					_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE `%s`;", req.Name))
+					c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to create database user: %s", err.Error())})
+					return
+				}
+
+				_, err = runSQLCommand(fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%%';", req.Name, req.Username))
+				if err != nil {
+					_, _ = runSQLCommand(fmt.Sprintf("DROP USER '%s'@'%%';", req.Username))
+					_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE `%s`;", req.Name))
+					c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to grant privileges: %s", err.Error())})
+					return
+				}
+
+				_, err = runSQLCommand("FLUSH PRIVILEGES;")
+				if err != nil {
+					c.JSON(500, gin.H{"error": fmt.Sprintf("Flush privileges failed: %s", err.Error())})
+					return
+				}
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.DELETE("/databases/:name", func(c *gin.Context) {
+			name := c.Param("name")
+			dbNamePattern := regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+			if !dbNamePattern.MatchString(name) {
+				c.JSON(400, gin.H{"error": "Invalid database name"})
+				return
+			}
+
+			_, err := runSQLCommand(fmt.Sprintf("DROP DATABASE `%s`;", name))
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/databases/backup", func(c *gin.Context) {
+			var req struct {
+				Name string `json:"name"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			dbNamePattern := regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+			if !dbNamePattern.MatchString(req.Name) {
+				c.JSON(400, gin.H{"error": "Invalid database name"})
+				return
+			}
+
+			file, err := runBackup(req.Name)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{
+				"status": "ok",
+				"file":   file,
+			})
+		})
+
+		// App Store Endpoints
+		api.GET("/apps", func(c *gin.Context) {
+			catalog := []StoreApp{
+				{
+					ID:          "nginx-proxy-manager",
+					Name:        "Nginx Proxy Manager",
+					Description: "Easy reverse proxy manager with automated SSL/TLS certificates via Let's Encrypt.",
+					Category:    "Web Proxy",
+					DefaultPort: "81",
+					Image:       "jc21/nginx-proxy-manager:latest",
+					Status:      "not_installed",
+				},
+				{
+					ID:          "phpmyadmin",
+					Name:        "phpMyAdmin",
+					Description: "Web UI interface to manage MySQL and MariaDB databases easily.",
+					Category:    "Database GUI",
+					DefaultPort: "8080",
+					Image:       "phpmyadmin:latest",
+					Status:      "not_installed",
+				},
+				{
+					ID:          "redis-cache",
+					Name:        "Redis",
+					Description: "High-performance in-memory key-value database and caching store.",
+					Category:    "Database",
+					DefaultPort: "6379",
+					Image:       "redis:alpine",
+					Status:      "not_installed",
+				},
+				{
+					ID:          "postgres-db",
+					Name:        "PostgreSQL",
+					Description: "Robust open-source object-relational database management system.",
+					Category:    "Database",
+					DefaultPort: "5432",
+					Image:       "postgres:alpine",
+					Status:      "not_installed",
+				},
+				{
+					ID:          "mongodb-db",
+					Name:        "MongoDB",
+					Description: "Popular document-oriented database for storing JSON-like documents.",
+					Category:    "Database",
+					DefaultPort: "27017",
+					Image:       "mongo:latest",
+					Status:      "not_installed",
+				},
+				{
+					ID:          "wordpress-app",
+					Name:        "WordPress",
+					Description: "World's most popular blogging software and content management system.",
+					Category:    "CMS",
+					DefaultPort: "8081",
+					Image:       "wordpress:latest",
+					Status:      "not_installed",
+				},
+				{
+					ID:          "joomla-app",
+					Name:        "Joomla",
+					Description: "A powerful, flexible, and feature-rich Content Management System (CMS).",
+					Category:    "CMS",
+					DefaultPort: "8082",
+					Image:       "joomla:latest",
+					Status:      "not_installed",
+				},
+				{
+					ID:          "drupal-app",
+					Name:        "Drupal",
+					Description: "An open-source content management platform for high-performance websites.",
+					Category:    "CMS",
+					DefaultPort: "8083",
+					Image:       "drupal:latest",
+					Status:      "not_installed",
+				},
+				{
+					ID:          "ghost-app",
+					Name:        "Ghost",
+					Description: "A professional headless Node.js blogging and publication platform.",
+					Category:    "CMS",
+					DefaultPort: "2368",
+					Image:       "ghost:alpine",
+					Status:      "not_installed",
+				},
+				{
+					ID:          "prestashop-app",
+					Name:        "PrestaShop",
+					Description: "A popular, fully customizable open-source e-commerce solution.",
+					Category:    "CMS",
+					DefaultPort: "8084",
+					Image:       "prestashop/prestashop:latest",
+					Status:      "not_installed",
+				},
+			}
+
+			// Get status of container names
+			cmd := exec.Command("docker", "ps", "-a", "--format", "{{.Names}}|{{.State}}")
+			output, err := cmd.CombinedOutput()
+			statuses := make(map[string]string)
+			if err == nil {
+				lines := strings.Split(string(output), "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if line == "" {
+						continue
+					}
+					parts := strings.SplitN(line, "|", 2)
+					if len(parts) == 2 {
+						statuses[parts[0]] = parts[1]
+					}
+				}
+			}
+
+			metaList, _ := loadAppsMetadata()
+			var finalApps []StoreApp
+			installedIDs := make(map[string]bool)
+
+			// 1. Add all installed instances from metadata
+			for _, m := range metaList {
+				installedIDs[m.ID] = true
+
+				// Skip instances that have a domain configured (as requested by user)
+				if m.Domain != "" {
+					continue
+				}
+
+				baseAppID := m.AppID
+				if baseAppID == "" {
+					baseAppID = m.ID
+				}
+
+				var baseApp StoreApp
+				for _, ca := range catalog {
+					if ca.ID == baseAppID {
+						baseApp = ca
+						break
+					}
+				}
+
+				status := "stopped"
+				if state, found := statuses[m.ID]; found && state == "running" {
+					status = "running"
+				}
+
+				displayName := baseApp.Name
+				if m.Domain != "" {
+					displayName = fmt.Sprintf("%s (%s)", baseApp.Name, m.Domain)
+				} else if m.ID != baseAppID {
+					displayName = fmt.Sprintf("%s (%s)", baseApp.Name, m.ID)
+				}
+
+				finalApps = append(finalApps, StoreApp{
+					ID:          m.ID,
+					Name:        displayName,
+					Description: baseApp.Description,
+					Category:    baseApp.Category,
+					DefaultPort: m.Port,
+					Image:       baseApp.Image,
+					Status:      status,
+					Domain:      m.Domain,
+				})
+			}
+
+			// 2. Add base catalog items so user can install new ones
+			for _, ca := range catalog {
+				// Prevent multiple installs of Nginx Proxy Manager
+				if ca.ID == "nginx-proxy-manager" && installedIDs[ca.ID] {
+					continue
+				}
+				ca.Status = "not_installed"
+				finalApps = append(finalApps, ca)
+			}
+
+			c.JSON(200, finalApps)
+		})
+
+		api.POST("/apps/install", func(c *gin.Context) {
+			var req struct {
+				ID       string `json:"id"`
+				Port     string `json:"port"`
+				Password string `json:"password"`
+				Domain   string `json:"domain"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			idPattern := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+			if !idPattern.MatchString(req.ID) {
+				c.JSON(400, gin.H{"error": "Invalid application ID"})
+				return
+			}
+
+			portPattern := regexp.MustCompile(`^[0-9]+$`)
+			if req.Port != "" && !portPattern.MatchString(req.Port) {
+				c.JSON(400, gin.H{"error": "Invalid port number"})
+				return
+			}
+
+			domainPattern := regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
+			if req.Domain != "" && !domainPattern.MatchString(req.Domain) {
+				c.JSON(400, gin.H{"error": "Invalid domain name"})
+				return
+			}
+
+			var wpDBName, wpDBUser, wpDBPass string
+			var runCmd *exec.Cmd
+			port := req.Port
+
+			// Determine unique container ID
+			containerID := req.ID
+			if req.ID != "nginx-proxy-manager" {
+				if req.Domain != "" {
+					safeDomain := strings.ReplaceAll(req.Domain, ".", "-")
+					containerID = fmt.Sprintf("%s-%s", req.ID, safeDomain)
+				} else {
+					containerID = fmt.Sprintf("%s-%s", req.ID, generateRandomString(6))
+				}
+			}
+
+			// Check if containerID already exists in metadata
+			metaList, _ := loadAppsMetadata()
+			for _, m := range metaList {
+				if m.ID == containerID {
+					c.JSON(400, gin.H{"error": "An instance with this domain or name already exists."})
+					return
+				}
+			}
+
+			switch req.ID {
+			case "nginx-proxy-manager":
+				if port == "" {
+					port = "81"
+				}
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--restart", "unless-stopped",
+					"-p", "80:80",
+					"-p", "443:443",
+					"-p", port+":81",
+					"-v", "/var/lib/nginx-proxy-manager:/data",
+					"-v", "/var/lib/nginx-proxy-manager/letsencrypt:/etc/letsencrypt",
+					"jc21/nginx-proxy-manager:latest")
+			case "phpmyadmin":
+				if port == "" {
+					port = "8080"
+				}
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--restart", "unless-stopped",
+					"-p", port+":80",
+					"-e", "PMA_ARBITRARY=1",
+					"phpmyadmin:latest")
+			case "redis-cache":
+				if port == "" {
+					port = "6379"
+				}
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--restart", "unless-stopped",
+					"-p", port+":6379",
+					"-v", containerID+"_data:/data",
+					"redis:alpine")
+			case "postgres-db":
+				if port == "" {
+					port = "5432"
+				}
+				pwd := req.Password
+				if pwd == "" {
+					pwd = "postgres_secure_pass_2026"
+				}
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--restart", "unless-stopped",
+					"-p", port+":5432",
+					"-v", containerID+"_data:/var/lib/postgresql/data",
+					"-e", "POSTGRES_PASSWORD="+pwd,
+					"postgres:alpine")
+			case "mongodb-db":
+				if port == "" {
+					port = "27017"
+				}
+				pwd := req.Password
+				if pwd == "" {
+					pwd = "mongo_secure_pass_2026"
+				}
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--restart", "unless-stopped",
+					"-p", port+":27017",
+					"-v", containerID+"_data:/data/db",
+					"-e", "MONGO_INITDB_ROOT_USERNAME=admin",
+					"-e", "MONGO_INITDB_ROOT_PASSWORD="+pwd,
+					"mongo:latest")
+			case "wordpress-app":
+				if port == "" {
+					port = "8081"
+				}
+
+				var dbErr error
+				wpDBName, wpDBUser, wpDBPass, dbErr = provisionCMSDatabase("wp")
+				if dbErr != nil {
+					c.JSON(500, gin.H{"error": dbErr.Error()})
+					return
+				}
+
+				dbConfig, _ := loadDBConfig()
+				dbHostForDocker := dbConfig.Host
+				if dbHostForDocker == "127.0.0.1" || dbHostForDocker == "localhost" {
+					dbHostForDocker = "host.docker.internal"
+				}
+				dbHostPortForDocker := fmt.Sprintf("%s:%s", dbHostForDocker, dbConfig.Port)
+
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--add-host", "host.docker.internal:host-gateway",
+					"--restart", "unless-stopped",
+					"-p", port+":80",
+					"-v", containerID+"_data:/var/www/html",
+					"-e", "WORDPRESS_DB_HOST="+dbHostPortForDocker,
+					"-e", "WORDPRESS_DB_USER="+wpDBUser,
+					"-e", "WORDPRESS_DB_PASSWORD="+wpDBPass,
+					"-e", "WORDPRESS_DB_NAME="+wpDBName,
+					"wordpress:latest")
+			case "joomla-app":
+				if port == "" {
+					port = "8082"
+				}
+
+				var dbErr error
+				wpDBName, wpDBUser, wpDBPass, dbErr = provisionCMSDatabase("joomla")
+				if dbErr != nil {
+					c.JSON(500, gin.H{"error": dbErr.Error()})
+					return
+				}
+
+				dbConfig, _ := loadDBConfig()
+				dbHostForDocker := dbConfig.Host
+				if dbHostForDocker == "127.0.0.1" || dbHostForDocker == "localhost" {
+					dbHostForDocker = "host.docker.internal"
+				}
+				dbHostPortForDocker := fmt.Sprintf("%s:%s", dbHostForDocker, dbConfig.Port)
+
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--add-host", "host.docker.internal:host-gateway",
+					"--restart", "unless-stopped",
+					"-p", port+":80",
+					"-v", containerID+"_data:/var/www/html",
+					"-e", "JOOMLA_DB_HOST="+dbHostPortForDocker,
+					"-e", "JOOMLA_DB_USER="+wpDBUser,
+					"-e", "JOOMLA_DB_PASSWORD="+wpDBPass,
+					"-e", "JOOMLA_DB_NAME="+wpDBName,
+					"joomla:latest")
+			case "drupal-app":
+				if port == "" {
+					port = "8083"
+				}
+
+				var dbErr error
+				wpDBName, wpDBUser, wpDBPass, dbErr = provisionCMSDatabase("drupal")
+				if dbErr != nil {
+					c.JSON(500, gin.H{"error": dbErr.Error()})
+					return
+				}
+
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--add-host", "host.docker.internal:host-gateway",
+					"--restart", "unless-stopped",
+					"-p", port+":80",
+					"-v", containerID+"_data:/var/www/html",
+					"drupal:latest")
+			case "ghost-app":
+				if port == "" {
+					port = "2368"
+				}
+
+				var dbErr error
+				wpDBName, wpDBUser, wpDBPass, dbErr = provisionCMSDatabase("ghost")
+				if dbErr != nil {
+					c.JSON(500, gin.H{"error": dbErr.Error()})
+					return
+				}
+
+				dbConfig, _ := loadDBConfig()
+				dbHostForDocker := dbConfig.Host
+				if dbHostForDocker == "127.0.0.1" || dbHostForDocker == "localhost" {
+					dbHostForDocker = "host.docker.internal"
+				}
+
+				ghostURL := "http://localhost:" + port
+				if req.Domain != "" {
+					ghostURL = "http://" + req.Domain
+				}
+
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--add-host", "host.docker.internal:host-gateway",
+					"--restart", "unless-stopped",
+					"-p", port+":2368",
+					"-v", containerID+"_data:/var/lib/ghost/content",
+					"-e", "url="+ghostURL,
+					"-e", "database__client=mysql",
+					"-e", "database__connection__host="+dbHostForDocker,
+					"-e", "database__connection__port="+dbConfig.Port,
+					"-e", "database__connection__user="+wpDBUser,
+					"-e", "database__connection__password="+wpDBPass,
+					"-e", "database__connection__database="+wpDBName,
+					"ghost:alpine")
+			case "prestashop-app":
+				if port == "" {
+					port = "8084"
+				}
+
+				var dbErr error
+				wpDBName, wpDBUser, wpDBPass, dbErr = provisionCMSDatabase("presta")
+				if dbErr != nil {
+					c.JSON(500, gin.H{"error": dbErr.Error()})
+					return
+				}
+
+				dbConfig, _ := loadDBConfig()
+				dbHostForDocker := dbConfig.Host
+				if dbHostForDocker == "127.0.0.1" || dbHostForDocker == "localhost" {
+					dbHostForDocker = "host.docker.internal"
+				}
+				dbHostPortForDocker := fmt.Sprintf("%s:%s", dbHostForDocker, dbConfig.Port)
+
+				runCmd = exec.Command("docker", "run", "-d",
+					"--name", containerID,
+					"--add-host", "host.docker.internal:host-gateway",
+					"--restart", "unless-stopped",
+					"-p", port+":80",
+					"-v", containerID+"_data:/var/www/html",
+					"-e", "DB_SERVER="+dbHostPortForDocker,
+					"-e", "DB_USER="+wpDBUser,
+					"-e", "DB_PASSWD="+wpDBPass,
+					"-e", "DB_NAME="+wpDBName,
+					"prestashop/prestashop:latest")
+			default:
+				c.JSON(400, gin.H{"error": "Unsupported application ID"})
+				return
+			}
+
+			output, err := runCmd.CombinedOutput()
+			if err != nil {
+				// Clean up DB if container start failed
+				if wpDBName != "" {
+					_, _ = runSQLCommand(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%';", wpDBUser))
+					_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", wpDBName))
+					_, _ = runSQLCommand("FLUSH PRIVILEGES;")
+				}
+				c.JSON(500, gin.H{"error": fmt.Sprintf("%s: %s", err.Error(), strings.TrimSpace(string(output)))})
+				return
+			}
+
+			// Configure Nginx Proxy if domain is provided
+			if req.Domain != "" {
+				err = createNginxProxy(req.Domain, port)
+				if err != nil {
+					c.JSON(200, gin.H{
+						"status":       "ok",
+						"container_id": strings.TrimSpace(string(output)),
+						"warning":      "Container started, but Nginx proxy creation failed: " + err.Error(),
+					})
+					return
+				}
+				runCertbot(req.Domain)
+
+				// Save DB info to Domain Note so user can copy-paste it
+				if wpDBName != "" {
+					note := fmt.Sprintf("CMS: %s | DB: %s | User: %s | Pass: %s", req.ID, wpDBName, wpDBUser, wpDBPass)
+					_ = updateDomainNote(req.Domain, note)
+				}
+			}
+
+			// Save to apps_metadata.json
+			updated := false
+			newMeta := AppMetadata{
+				ID:     containerID,
+				AppID:  req.ID,
+				Domain: req.Domain,
+				Port:   port,
+				DBName: wpDBName,
+				DBUser: wpDBUser,
+				DBPass: wpDBPass,
+			}
+			for i, m := range metaList {
+				if m.ID == containerID {
+					metaList[i] = newMeta
+					updated = true
+					break
+				}
+			}
+			if !updated {
+				metaList = append(metaList, newMeta)
+			}
+			_ = saveAppsMetadata(metaList)
+
+			c.JSON(200, gin.H{"status": "ok", "container_id": strings.TrimSpace(string(output))})
+		})
+
+		api.POST("/apps/uninstall", func(c *gin.Context) {
+			var req struct {
+				ID string `json:"id"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			idPattern := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+			if !idPattern.MatchString(req.ID) {
+				c.JSON(400, gin.H{"error": "Invalid application ID"})
+				return
+			}
+
+			// Stop and remove docker container
+			cmd := exec.Command("docker", "rm", "-f", req.ID)
+			output, err := cmd.CombinedOutput()
+			if err != nil && !strings.Contains(string(output), "No such container") {
+				c.JSON(500, gin.H{"error": fmt.Sprintf("%s: %s", err.Error(), strings.TrimSpace(string(output)))})
+				return
+			}
+
+			// Try to remove associated volume (ignore errors if it doesn't exist)
+			_ = exec.Command("docker", "volume", "rm", req.ID+"_data").Run()
+
+			// Clean up Nginx reverse proxy and DB database/user
+			metaList, _ := loadAppsMetadata()
+			var remainingMeta []AppMetadata
+			for _, m := range metaList {
+				if m.ID == req.ID {
+					if m.Domain != "" {
+						_ = deleteNginxProxy(m.Domain)
+					}
+					if m.DBName != "" {
+						_, _ = runSQLCommand(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%';", m.DBUser))
+						_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", m.DBName))
+						_, _ = runSQLCommand("FLUSH PRIVILEGES;")
+					}
+				} else {
+					remainingMeta = append(remainingMeta, m)
+				}
+			}
+			_ = saveAppsMetadata(remainingMeta)
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
 		// SSE - Real-time Streaming
 		api.GET("/stream", func(c *gin.Context) {
 			c.Writer.Header().Set("Content-Type", "text/event-stream")
@@ -1079,4 +2433,312 @@ func main() {
 	}
 	log.Printf("🚀 AcmaDash %s running on :%s\n", Version, port)
 	r.Run(":" + port)
+}
+
+type FirewallRule struct {
+	Index  int    `json:"index"`
+	To     string `json:"to"`
+	Action string `json:"action"`
+	From   string `json:"from"`
+}
+
+type FirewallStatus struct {
+	Enabled bool           `json:"enabled"`
+	Rules   []FirewallRule `json:"rules"`
+}
+
+var ruleRegex = regexp.MustCompile(`^\[\s*(\d+)\]\s+(.*?)\s+(ALLOW IN|DENY IN|ALLOW OUT|DENY OUT|ALLOW|DENY)\s+(.*)$`)
+
+func getFirewallStatus() FirewallStatus {
+	cmd := exec.Command("ufw", "status", "numbered")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Return disabled if command fails or not installed
+		return FirewallStatus{Enabled: false, Rules: []FirewallRule{}}
+	}
+
+	lines := strings.Split(string(output), "\n")
+	enabled := false
+	var rules []FirewallRule
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Status: active") {
+			enabled = true
+			continue
+		}
+		if strings.HasPrefix(line, "Status: inactive") {
+			enabled = false
+			break
+		}
+
+		match := ruleRegex.FindStringSubmatch(line)
+		if len(match) == 5 {
+			idx := 0
+			fmt.Sscanf(match[1], "%d", &idx)
+			rules = append(rules, FirewallRule{
+				Index:  idx,
+				To:     strings.TrimSpace(match[2]),
+				Action: strings.TrimSpace(match[3]),
+				From:   strings.TrimSpace(match[4]),
+			})
+		}
+	}
+
+	return FirewallStatus{
+		Enabled: enabled,
+		Rules:   rules,
+	}
+}
+
+type FileInfo struct {
+	Name    string    `json:"name"`
+	Size    int64     `json:"size"`
+	IsDir   bool      `json:"is_dir"`
+	ModTime time.Time `json:"mod_time"`
+	Mode    string    `json:"mode"`
+}
+
+type DBConfig struct {
+	Host     string `json:"host"`
+	Port     string `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func getDBConfigPath() string {
+	return "db_config.json"
+}
+
+func loadDBConfig() (DBConfig, error) {
+	var config DBConfig
+	path := getDBConfigPath()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return config, nil // Return empty if not configured
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return config, err
+	}
+	err = json.Unmarshal(data, &config)
+	return config, err
+}
+
+func saveDBConfig(config DBConfig) error {
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(getDBConfigPath(), data, 0600)
+}
+
+func runSQLCommand(sql string) (string, error) {
+	config, err := loadDBConfig()
+	if err != nil {
+		return "", err
+	}
+	if config.Host == "" {
+		return "", fmt.Errorf("Database connection is not configured")
+	}
+
+	args := []string{"-h", config.Host, "-P", config.Port, "-u", config.Username, "-e", sql}
+	cmd := exec.Command("mysql", args...)
+	cmd.Env = os.Environ()
+	if config.Password != "" {
+		cmd.Env = append(cmd.Env, "MYSQL_PWD="+config.Password)
+	}
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%s: %s", err.Error(), strings.TrimSpace(string(output)))
+	}
+	return string(output), nil
+}
+
+func runBackup(dbName string) (string, error) {
+	config, err := loadDBConfig()
+	if err != nil {
+		return "", err
+	}
+	if config.Host == "" {
+		return "", fmt.Errorf("Database connection is not configured")
+	}
+
+	backupDir := "/var/www/backups"
+	err = os.MkdirAll(backupDir, 0755)
+	if err != nil {
+		return "", err
+	}
+
+	backupFile := filepath.Join(backupDir, fmt.Sprintf("%s_%s.sql", dbName, time.Now().Format("20060102_150405")))
+
+	args := []string{"-h", config.Host, "-P", config.Port, "-u", config.Username, dbName}
+	cmd := exec.Command("mysqldump", args...)
+	cmd.Env = os.Environ()
+	if config.Password != "" {
+		cmd.Env = append(cmd.Env, "MYSQL_PWD="+config.Password)
+	}
+
+	output, err := cmd.Output()
+	if err != nil {
+		errCmd := exec.Command("mysqldump", args...)
+		errCmd.Env = cmd.Env
+		errOut, _ := errCmd.CombinedOutput()
+		return "", fmt.Errorf("mysqldump failed: %s", strings.TrimSpace(string(errOut)))
+	}
+
+	err = os.WriteFile(backupFile, output, 0644)
+	if err != nil {
+		return "", err
+	}
+
+	return backupFile, nil
+}
+
+type StoreApp struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category"`
+	DefaultPort string `json:"default_port"`
+	Image       string `json:"image"`
+	Status      string `json:"status"`
+	Domain      string `json:"domain,omitempty"`
+}
+
+type AppMetadata struct {
+	ID     string `json:"id"`
+	AppID  string `json:"app_id"`
+	Domain string `json:"domain"`
+	Port   string `json:"port"`
+	DBName string `json:"db_name"`
+	DBUser string `json:"db_user"`
+	DBPass string `json:"db_pass"`
+}
+
+func getAppsMetadataPath() string {
+	return "apps_metadata.json"
+}
+
+func loadAppsMetadata() ([]AppMetadata, error) {
+	var list []AppMetadata
+	path := getAppsMetadataPath()
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return list, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return list, err
+	}
+	err = json.Unmarshal(data, &list)
+	return list, err
+}
+
+func saveAppsMetadata(list []AppMetadata) error {
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(getAppsMetadataPath(), data, 0600)
+}
+
+func generateRandomString(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+	bytes := make([]byte, n)
+	seed := time.Now().UnixNano()
+	for i := 0; i < n; i++ {
+		seed = (seed*1103515245 + 12345) & 0x7fffffff
+		bytes[i] = letters[seed%int64(len(letters))]
+	}
+	return string(bytes)
+}
+
+func createNginxProxy(domain string, port string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	configContent := fmt.Sprintf(`server {
+    listen 80;
+    server_name %s;
+
+    location / {
+        proxy_pass http://127.0.0.1:%s;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+`, domain, port)
+
+	availablePath := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain)
+	enabledPath := fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", domain)
+
+	err := os.WriteFile(availablePath, []byte(configContent), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write nginx sites-available: %w", err)
+	}
+
+	_ = os.Remove(enabledPath)
+	err = os.Symlink(availablePath, enabledPath)
+	if err != nil {
+		return fmt.Errorf("failed to symlink nginx config: %w", err)
+	}
+
+	return reloadNginx()
+}
+
+func deleteNginxProxy(domain string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	availablePath := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain)
+	enabledPath := fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", domain)
+
+	_ = os.Remove(enabledPath)
+	_ = os.Remove(availablePath)
+
+	return reloadNginx()
+}
+
+func runCertbot(domain string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	// Run certbot in background or separate routine so we don't block
+	go func() {
+		cmd := exec.Command("certbot", "--nginx", "-d", domain, "--non-interactive", "--agree-tos", "--register-unsafely-without-email")
+		_ = cmd.Run()
+	}()
+}
+
+func fixHostDatabaseForDocker() {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	// 1. Allow UFW for docker0 bridge network
+	_ = exec.Command("ufw", "allow", "in", "on", "docker0", "to", "any", "port", "3306").Run()
+	_ = exec.Command("ufw", "allow", "from", "172.17.0.0/16", "to", "any", "port", "3306").Run()
+
+	// 2. Fix MariaDB/MySQL bind-address to allow external connections (0.0.0.0)
+	script := `
+	CONFIG_FILES="/etc/mysql/mariadb.conf.d/50-server.cnf /etc/mysql/mysql.conf.d/mysqld.cnf /etc/mysql/my.cnf"
+	CHANGED=0
+	for file in $CONFIG_FILES; do
+		if [ -f "$file" ]; then
+			if grep -q "bind-address[[:space:]]*=[[:space:]]*127.0.0.1" "$file"; then
+				sed -i 's/bind-address[[:space:]]*=[[:space:]]*127.0.0.1/bind-address            = 0.0.0.0/g' "$file"
+				CHANGED=1
+			fi
+		fi
+	done
+	if [ $CHANGED -eq 1 ]; then
+		systemctl restart mariadb || systemctl restart mysql
+	fi
+	`
+	_ = exec.Command("bash", "-c", script).Run()
 }

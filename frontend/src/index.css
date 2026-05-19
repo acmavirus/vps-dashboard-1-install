@@ -14,6 +14,9 @@
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
   }
 
+  /* ==========================================================================
+     1. DEFAULT THEME: Slate Onyx
+     ========================================================================== */
   :root {
     --background: 0 0% 100%;
     --foreground: 240 10% 4%;
@@ -57,6 +60,241 @@
     --border: 240 4% 16%;
     --input: 240 4% 16%;
     --ring: 240 5% 84%;
+  }
+
+  /* ==========================================================================
+     2. THEME: Aurora Violet
+     ========================================================================== */
+  .theme-violet {
+    --background: 270 20% 98%;
+    --foreground: 270 30% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 270 30% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 270 30% 10%;
+    --primary: 270 50% 40%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 270 15% 95%;
+    --secondary-foreground: 270 50% 30%;
+    --muted: 270 15% 95%;
+    --muted-foreground: 270 10% 40%;
+    --accent: 270 15% 95%;
+    --accent-foreground: 270 50% 30%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 270 15% 90%;
+    --input: 270 15% 90%;
+    --ring: 270 50% 40%;
+  }
+
+  .theme-violet.dark {
+    --background: 270 25% 6%;
+    --foreground: 270 10% 95%;
+    --card: 270 20% 9%;
+    --card-foreground: 270 10% 95%;
+    --popover: 270 20% 9%;
+    --popover-foreground: 270 10% 95%;
+    --primary: 270 50% 60%;
+    --primary-foreground: 270 25% 6%;
+    --secondary: 270 15% 14%;
+    --secondary-foreground: 270 10% 95%;
+    --muted: 270 15% 14%;
+    --muted-foreground: 270 10% 55%;
+    --accent: 270 15% 14%;
+    --accent-foreground: 270 10% 95%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 270 15% 15%;
+    --input: 270 15% 15%;
+    --ring: 270 50% 60%;
+  }
+
+  /* ==========================================================================
+     3. THEME: Nordic Forest
+     ========================================================================== */
+  .theme-forest {
+    --background: 140 10% 98%;
+    --foreground: 140 30% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 140 30% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 140 30% 10%;
+    --primary: 142 50% 30%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 140 10% 95%;
+    --secondary-foreground: 142 50% 25%;
+    --muted: 140 10% 95%;
+    --muted-foreground: 140 10% 40%;
+    --accent: 140 10% 95%;
+    --accent-foreground: 142 50% 25%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 140 10% 90%;
+    --input: 140 10% 90%;
+    --ring: 142 50% 30%;
+  }
+
+  .theme-forest.dark {
+    --background: 150 20% 5%;
+    --foreground: 140 10% 94%;
+    --card: 150 15% 7.5%;
+    --card-foreground: 140 10% 94%;
+    --popover: 150 15% 7.5%;
+    --popover-foreground: 140 10% 94%;
+    --primary: 142 50% 50%;
+    --primary-foreground: 150 20% 5%;
+    --secondary: 140 10% 13%;
+    --secondary-foreground: 140 10% 94%;
+    --muted: 140 10% 13%;
+    --muted-foreground: 140 8% 50%;
+    --accent: 140 10% 13%;
+    --accent-foreground: 140 10% 94%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 140 10% 14%;
+    --input: 140 10% 14%;
+    --ring: 142 50% 50%;
+  }
+
+  /* ==========================================================================
+     4. THEME: Oceanic Abyss
+     ========================================================================== */
+  .theme-abyss {
+    --background: 210 20% 98%;
+    --foreground: 210 30% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 30% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 30% 10%;
+    --primary: 215 60% 40%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 210 15% 95%;
+    --secondary-foreground: 215 60% 30%;
+    --muted: 210 15% 95%;
+    --muted-foreground: 210 10% 40%;
+    --accent: 210 15% 95%;
+    --accent-foreground: 215 60% 30%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 210 15% 90%;
+    --input: 210 15% 90%;
+    --ring: 215 60% 40%;
+  }
+
+  .theme-abyss.dark {
+    --background: 220 30% 4.5%;
+    --foreground: 210 10% 95%;
+    --card: 220 25% 7%;
+    --card-foreground: 210 10% 95%;
+    --popover: 220 25% 7%;
+    --popover-foreground: 210 10% 95%;
+    --primary: 215 60% 60%;
+    --primary-foreground: 220 30% 4.5%;
+    --secondary: 210 15% 13%;
+    --secondary-foreground: 210 10% 95%;
+    --muted: 210 15% 13%;
+    --muted-foreground: 210 10% 55%;
+    --accent: 210 15% 13%;
+    --accent-foreground: 210 10% 95%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 210 15% 14%;
+    --input: 210 15% 14%;
+    --ring: 215 60% 60%;
+  }
+
+  /* ==========================================================================
+     5. THEME: Sunset Amber
+     ========================================================================== */
+  .theme-amber {
+    --background: 25 15% 98%;
+    --foreground: 25 30% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 25 30% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 25 30% 10%;
+    --primary: 35 70% 35%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 25 15% 95%;
+    --secondary-foreground: 35 70% 25%;
+    --muted: 25 15% 95%;
+    --muted-foreground: 25 10% 40%;
+    --accent: 25 15% 95%;
+    --accent-foreground: 35 70% 25%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 25 15% 90%;
+    --input: 25 15% 90%;
+    --ring: 35 70% 35%;
+  }
+
+  .theme-amber.dark {
+    --background: 20 15% 5%;
+    --foreground: 25 10% 95%;
+    --card: 20 15% 7.5%;
+    --card-foreground: 25 10% 95%;
+    --popover: 20 15% 7.5%;
+    --popover-foreground: 25 10% 95%;
+    --primary: 35 70% 55%;
+    --primary-foreground: 20 15% 5%;
+    --secondary: 25 12% 13%;
+    --secondary-foreground: 25 10% 95%;
+    --muted: 25 12% 13%;
+    --muted-foreground: 25 10% 55%;
+    --accent: 25 12% 13%;
+    --accent-foreground: 25 10% 95%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 25 12% 14%;
+    --input: 25 12% 14%;
+    --ring: 35 70% 55%;
+  }
+
+  /* ==========================================================================
+     6. THEME: aaPanel Green
+     ========================================================================== */
+  .theme-aapanel {
+    --background: 210 20% 97%;
+    --foreground: 215 25% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 15%;
+    --primary: 142 72% 29%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 20% 95%;
+    --secondary-foreground: 142 72% 25%;
+    --muted: 210 20% 95%;
+    --muted-foreground: 215 15% 45%;
+    --accent: 210 20% 95%;
+    --accent-foreground: 142 72% 25%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 20% 90%;
+    --input: 210 20% 90%;
+    --ring: 142 72% 29%;
+  }
+
+  .theme-aapanel.dark {
+    --background: 215 25% 6%;
+    --foreground: 210 10% 94%;
+    --card: 215 25% 8.5%;
+    --card-foreground: 210 10% 94%;
+    --popover: 215 25% 8.5%;
+    --popover-foreground: 210 10% 94%;
+    --primary: 142 70% 45%;
+    --primary-foreground: 215 25% 6%;
+    --secondary: 215 20% 14%;
+    --secondary-foreground: 210 10% 94%;
+    --muted: 215 20% 14%;
+    --muted-foreground: 215 10% 50%;
+    --accent: 215 20% 14%;
+    --accent-foreground: 210 10% 94%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 215 20% 15%;
+    --input: 215 20% 15%;
+    --ring: 142 70% 45%;
   }
 }
 
