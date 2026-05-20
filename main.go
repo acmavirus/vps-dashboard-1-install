@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	stdnet "net"
 	"net/http"
 	"net/url"
 	"os"
@@ -2026,6 +2027,30 @@ func main() {
 			var wpDBName, wpDBUser, wpDBPass string
 			var runCmd *exec.Cmd
 			port := req.Port
+			if port == "" {
+				switch req.ID {
+				case "nginx-proxy-manager":
+					port = "81"
+				case "phpmyadmin":
+					port = "8080"
+				case "redis-cache":
+					port = "6379"
+				case "postgres-db":
+					port = "5432"
+				case "mongodb-db":
+					port = "27017"
+				case "wordpress-app":
+					port = "8081"
+				case "joomla-app":
+					port = "8082"
+				case "drupal-app":
+					port = "8083"
+				case "ghost-app":
+					port = "2368"
+				case "prestashop-app":
+					port = "8084"
+				}
+			}
 
 			// Determine unique container ID
 			containerID := req.ID
@@ -2046,6 +2071,27 @@ func main() {
 					return
 				}
 			}
+
+			// Validate if the port is already allocated in metadata to another container
+			for _, m := range metaList {
+				if m.Port == port {
+					c.JSON(400, gin.H{"error": fmt.Sprintf("Cổng %s đã được sử dụng bởi ứng dụng khác (%s). Vui lòng chọn cổng khác.", port, m.ID)})
+					return
+				}
+			}
+
+			// Check if the port is actively listening on the host (by another process or a running docker container)
+			if port != "" {
+				ln, err := stdnet.Listen("tcp", ":"+port)
+				if err != nil {
+					c.JSON(400, gin.H{"error": fmt.Sprintf("Cổng %s đang bị chiếm dụng trên hệ thống. Vui lòng chọn cổng khác.", port)})
+					return
+				}
+				ln.Close()
+			}
+
+			// Pre-cleanup: if containerID exists in docker (e.g. from an orphaned failed run), force remove it first to avoid exit status 125 conflict
+			_ = exec.Command("docker", "rm", "-f", containerID).Run()
 
 			switch req.ID {
 			case "nginx-proxy-manager":
@@ -2275,27 +2321,7 @@ func main() {
 				return
 			}
 
-			// Configure Nginx Proxy if domain is provided
-			if req.Domain != "" {
-				err = createNginxProxy(req.Domain, port)
-				if err != nil {
-					c.JSON(200, gin.H{
-						"status":       "ok",
-						"container_id": strings.TrimSpace(string(output)),
-						"warning":      "Container started, but Nginx proxy creation failed: " + err.Error(),
-					})
-					return
-				}
-				runCertbot(req.Domain)
-
-				// Save DB info to Domain Note so user can copy-paste it
-				if wpDBName != "" {
-					note := fmt.Sprintf("CMS: %s | DB: %s | User: %s | Pass: %s", req.ID, wpDBName, wpDBUser, wpDBPass)
-					_ = updateDomainNote(req.Domain, note)
-				}
-			}
-
-			// Save to apps_metadata.json
+			// Save to apps_metadata.json (save first so that even if Nginx proxy fails, the app is registered as installed)
 			updated := false
 			newMeta := AppMetadata{
 				ID:     containerID,
@@ -2317,6 +2343,26 @@ func main() {
 				metaList = append(metaList, newMeta)
 			}
 			_ = saveAppsMetadata(metaList)
+
+			// Configure Nginx Proxy if domain is provided
+			if req.Domain != "" {
+				err = createNginxProxy(req.Domain, port)
+				if err != nil {
+					c.JSON(200, gin.H{
+						"status":       "ok",
+						"container_id": strings.TrimSpace(string(output)),
+						"warning":      "Container started, but Nginx proxy creation failed: " + err.Error(),
+					})
+					return
+				}
+				runCertbot(req.Domain)
+
+				// Save DB info to Domain Note so user can copy-paste it
+				if wpDBName != "" {
+					note := fmt.Sprintf("CMS: %s | DB: %s | User: %s | Pass: %s", req.ID, wpDBName, wpDBUser, wpDBPass)
+					_ = updateDomainNote(req.Domain, note)
+				}
+			}
 
 			c.JSON(200, gin.H{"status": "ok", "container_id": strings.TrimSpace(string(output))})
 		})
