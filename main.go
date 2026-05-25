@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
 	"embed"
 	"encoding/json"
 	"flag"
@@ -21,27 +22,35 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
+	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-var Version = "v2.2.3"
+var Version = "v2.2.4"
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
 
 var (
+	adminUser = "admin"
+	adminPass = "h5jH7Gv|5m+0"
+	authToken = "acmadash_secret_token_2024"
+
 	lastCpuAlert  time.Time
 	lastDdosAlert time.Time
 
 	cachedDomains   []DomainInfo
 	lastDomainCheck time.Time
+	cachedCPUModel  string
+	cachedCPUCores  int
 )
 
 type SystemStats struct {
@@ -49,6 +58,9 @@ type SystemStats struct {
 	RAM         float64 `json:"ram"`
 	RAMTotal    uint64  `json:"ram_total"`
 	RAMUsed     uint64  `json:"ram_used"`
+	SwapTotal   uint64  `json:"swap_total"`
+	SwapUsed    uint64  `json:"swap_used"`
+	SwapPercent float64 `json:"swap_percent"`
 	Disk        float64 `json:"disk"`
 	DiskTotal   uint64  `json:"disk_total"`
 	DiskUsed    uint64  `json:"disk_used"`
@@ -62,6 +74,13 @@ type SystemStats struct {
 	Connections int     `json:"connections"`
 	Timestamp   int64   `json:"timestamp"`
 	Version     string  `json:"version"`
+	Load1       float64 `json:"load_1"`
+	Load5       float64 `json:"load_5"`
+	Load15      float64 `json:"load_15"`
+	CPUCores    int     `json:"cpu_cores"`
+	CPUModel    string  `json:"cpu_model"`
+	DiskRead    uint64  `json:"disk_read"`
+	DiskWrite   uint64  `json:"disk_write"`
 }
 
 type ProcessInfo struct {
@@ -621,6 +640,7 @@ func getStats() SystemStats {
 	h, _ := host.Info()
 	n, _ := net.IOCounters(false)
 	c, _ := net.Connections("tcp")
+	swap, _ := mem.SwapMemory()
 
 	var netSent, netRecv uint64
 	if len(n) > 0 {
@@ -628,11 +648,30 @@ func getStats() SystemStats {
 		netRecv = n[0].BytesRecv
 	}
 
+	var load1, load5, load15 float64
+	if runtime.GOOS != "windows" {
+		if l, err := load.Avg(); err == nil {
+			load1 = l.Load1
+			load5 = l.Load5
+			load15 = l.Load15
+		}
+	}
+
+	dIO, _ := disk.IOCounters()
+	var diskRead, diskWrite uint64
+	for _, io := range dIO {
+		diskRead += io.ReadBytes
+		diskWrite += io.WriteBytes
+	}
+
 	stats := SystemStats{
 		CPU:         cpuPercent[0],
 		RAM:         vm.UsedPercent,
 		RAMTotal:    vm.Total,
 		RAMUsed:     vm.Used,
+		SwapTotal:   swap.Total,
+		SwapUsed:    swap.Used,
+		SwapPercent: swap.UsedPercent,
 		Disk:        d.UsedPercent,
 		DiskTotal:   d.Total,
 		DiskUsed:    d.Used,
@@ -646,6 +685,13 @@ func getStats() SystemStats {
 		Connections: len(c),
 		Timestamp:   time.Now().Unix(),
 		Version:     Version,
+		Load1:       load1,
+		Load5:       load5,
+		Load15:      load15,
+		CPUCores:    cachedCPUCores,
+		CPUModel:    cachedCPUModel,
+		DiskRead:    diskRead,
+		DiskWrite:   diskWrite,
 	}
 
 	if stats.CPU > 90.0 && time.Since(lastCpuAlert) > 5*time.Minute {
@@ -944,6 +990,18 @@ func getAllLogs() map[string]interface{} {
 
 func main() {
 	_ = godotenv.Load(".env")
+
+	// Cache CPU hardware specs at startup
+	if info, err := cpu.Info(); err == nil && len(info) > 0 {
+		cachedCPUModel = info[0].ModelName
+	} else {
+		cachedCPUModel = "Unknown CPU"
+	}
+	cachedCPUCores, _ = cpu.Counts(true)
+	if cachedCPUCores <= 0 {
+		cachedCPUCores = 1
+	}
+
 	vFlag := flag.Bool("v", false, "Version")
 	flag.Parse()
 	if *vFlag {
@@ -955,17 +1013,14 @@ func main() {
 	r := gin.Default()
 
 	// --- Authentication Configuration ---
-	adminUser := os.Getenv("ADMIN_USER")
-	if adminUser == "" {
-		adminUser = "admin"
+	if u := os.Getenv("ADMIN_USER"); u != "" {
+		adminUser = u
 	}
-	adminPass := os.Getenv("ADMIN_PASS")
-	if adminPass == "" {
-		adminPass = "h5jH7Gv|5m+0" // Mật khẩu cố định theo yêu cầu
+	if p := os.Getenv("ADMIN_PASS"); p != "" {
+		adminPass = p
 	}
-	authToken := os.Getenv("AUTH_TOKEN")
-	if authToken == "" {
-		authToken = "acmadash_secret_token_2024"
+	if t := os.Getenv("AUTH_TOKEN"); t != "" {
+		authToken = t
 	}
 
 	authMiddleware := func(c *gin.Context) {
@@ -1818,6 +1873,287 @@ func main() {
 			})
 		})
 
+		// Database Explorer Endpoints
+		api.GET("/databases/:name/tables", func(c *gin.Context) {
+			dbName := c.Param("name")
+			if !safeIdentifier(dbName) {
+				c.JSON(400, gin.H{"error": "Invalid database name"})
+				return
+			}
+
+			// We can query SHOW TABLE STATUS
+			res, err := executeCustomSQL(dbName, "SHOW TABLE STATUS;")
+			if err != nil {
+				// Fallback to simple SHOW TABLES if status fails
+				res2, err2 := executeCustomSQL(dbName, "SHOW TABLES;")
+				if err2 != nil {
+					c.JSON(500, gin.H{"error": err2.Error()})
+					return
+				}
+				
+				// Transform simple SHOW TABLES output into a standardized list
+				rows := res2["rows"].([][]interface{})
+				var tables []gin.H
+				for _, row := range rows {
+					if len(row) > 0 {
+						tables = append(tables, gin.H{
+							"name":       row[0],
+							"engine":     "InnoDB",
+							"rows":       0,
+							"data_size":  0,
+							"collation":  "utf8mb4_unicode_ci",
+							"comment":    "",
+						})
+					}
+				}
+				c.JSON(200, tables)
+				return
+			}
+
+			// Standard columns for SHOW TABLE STATUS
+			columns := res["columns"].([]string)
+			rows := res["rows"].([][]interface{})
+
+			nameIdx, engineIdx, rowsIdx, dataIdx, collationIdx, commentIdx := -1, -1, -1, -1, -1, -1
+			for i, col := range columns {
+				colLower := strings.ToLower(col)
+				switch colLower {
+				case "name":
+					nameIdx = i
+				case "engine":
+					engineIdx = i
+				case "rows":
+					rowsIdx = i
+				case "data_length":
+					dataIdx = i
+				case "collation":
+					collationIdx = i
+				case "comment":
+					commentIdx = i
+				}
+			}
+
+			var tables []gin.H
+			for _, row := range rows {
+				name := ""
+				engine := ""
+				var rowCount int64 = 0
+				var dataSize int64 = 0
+				collation := ""
+				comment := ""
+
+				if nameIdx >= 0 && nameIdx < len(row) && row[nameIdx] != nil {
+					name = fmt.Sprintf("%v", row[nameIdx])
+				}
+				if engineIdx >= 0 && engineIdx < len(row) && row[engineIdx] != nil {
+					engine = fmt.Sprintf("%v", row[engineIdx])
+				}
+				if rowsIdx >= 0 && rowsIdx < len(row) && row[rowsIdx] != nil {
+					if val, ok := row[rowsIdx].(int64); ok {
+						rowCount = val
+					} else {
+						fmt.Sscanf(fmt.Sprintf("%v", row[rowsIdx]), "%d", &rowCount)
+					}
+				}
+				if dataIdx >= 0 && dataIdx < len(row) && row[dataIdx] != nil {
+					if val, ok := row[dataIdx].(int64); ok {
+						dataSize = val
+					} else {
+						fmt.Sscanf(fmt.Sprintf("%v", row[dataIdx]), "%d", &dataSize)
+					}
+				}
+				if collationIdx >= 0 && collationIdx < len(row) && row[collationIdx] != nil {
+					collation = fmt.Sprintf("%v", row[collationIdx])
+				}
+				if commentIdx >= 0 && commentIdx < len(row) && row[commentIdx] != nil {
+					comment = fmt.Sprintf("%v", row[commentIdx])
+				}
+
+				if name != "" {
+					tables = append(tables, gin.H{
+						"name":       name,
+						"engine":     engine,
+						"rows":       rowCount,
+						"data_size":  dataSize,
+						"collation":  collation,
+						"comment":    comment,
+					})
+				}
+			}
+
+			c.JSON(200, tables)
+		})
+
+		api.GET("/databases/:name/tables/:table/columns", func(c *gin.Context) {
+			dbName := c.Param("name")
+			tableName := c.Param("table")
+			if !safeIdentifier(dbName) || !safeIdentifier(tableName) {
+				c.JSON(400, gin.H{"error": "Invalid database or table name"})
+				return
+			}
+
+			// We query: SHOW FULL COLUMNS FROM `table`
+			query := fmt.Sprintf("SHOW FULL COLUMNS FROM `%s`.`%s`;", dbName, tableName)
+			res, err := executeCustomSQL(dbName, query)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			columns := res["columns"].([]string)
+			rows := res["rows"].([][]interface{})
+
+			fieldIdx, typeIdx, collationIdx, nullIdx, keyIdx, defaultIdx, extraIdx, commentIdx := -1, -1, -1, -1, -1, -1, -1, -1
+			for i, col := range columns {
+				switch strings.ToLower(col) {
+				case "field":
+					fieldIdx = i
+				case "type":
+					typeIdx = i
+				case "collation":
+					collationIdx = i
+				case "null":
+					nullIdx = i
+				case "key":
+					keyIdx = i
+				case "default":
+					defaultIdx = i
+				case "extra":
+					extraIdx = i
+				case "comment":
+					commentIdx = i
+				}
+			}
+
+			var tableColumns []gin.H
+			for _, row := range rows {
+				field := ""
+				colType := ""
+				collation := ""
+				null := ""
+				key := ""
+				defVal := ""
+				extra := ""
+				comment := ""
+
+				if fieldIdx >= 0 && fieldIdx < len(row) && row[fieldIdx] != nil {
+					field = fmt.Sprintf("%v", row[fieldIdx])
+				}
+				if typeIdx >= 0 && typeIdx < len(row) && row[typeIdx] != nil {
+					colType = fmt.Sprintf("%v", row[typeIdx])
+				}
+				if collationIdx >= 0 && collationIdx < len(row) && row[collationIdx] != nil {
+					collation = fmt.Sprintf("%v", row[collationIdx])
+				}
+				if nullIdx >= 0 && nullIdx < len(row) && row[nullIdx] != nil {
+					null = fmt.Sprintf("%v", row[nullIdx])
+				}
+				if keyIdx >= 0 && keyIdx < len(row) && row[keyIdx] != nil {
+					key = fmt.Sprintf("%v", row[keyIdx])
+				}
+				if defaultIdx >= 0 && defaultIdx < len(row) && row[defaultIdx] != nil {
+					defVal = fmt.Sprintf("%v", row[defaultIdx])
+				}
+				if extraIdx >= 0 && extraIdx < len(row) && row[extraIdx] != nil {
+					extra = fmt.Sprintf("%v", row[extraIdx])
+				}
+				if commentIdx >= 0 && commentIdx < len(row) && row[commentIdx] != nil {
+					comment = fmt.Sprintf("%v", row[commentIdx])
+				}
+
+				tableColumns = append(tableColumns, gin.H{
+					"field":     field,
+					"type":      colType,
+					"collation": collation,
+					"null":      null,
+					"key":       key,
+					"default":   defVal,
+					"extra":     extra,
+					"comment":   comment,
+				})
+			}
+
+			c.JSON(200, tableColumns)
+		})
+
+		api.GET("/databases/:name/tables/:table/data", func(c *gin.Context) {
+			dbName := c.Param("name")
+			tableName := c.Param("table")
+			if !safeIdentifier(dbName) || !safeIdentifier(tableName) {
+				c.JSON(400, gin.H{"error": "Invalid database or table name"})
+				return
+			}
+
+			limitStr := c.DefaultQuery("limit", "50")
+			offsetStr := c.DefaultQuery("offset", "0")
+
+			var limit, offset int
+			fmt.Sscanf(limitStr, "%d", &limit)
+			fmt.Sscanf(offsetStr, "%d", &offset)
+
+			if limit <= 0 {
+				limit = 50
+			}
+			if offset < 0 {
+				offset = 0
+			}
+
+			// Get total count
+			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM `%s`.`%s`;", dbName, tableName)
+			countRes, err := executeCustomSQL(dbName, countQuery)
+			var total int64 = 0
+			if err == nil {
+				rows := countRes["rows"].([][]interface{})
+				if len(rows) > 0 && len(rows[0]) > 0 && rows[0][0] != nil {
+					if val, ok := rows[0][0].(int64); ok {
+						total = val
+					} else {
+						fmt.Sscanf(fmt.Sprintf("%v", rows[0][0]), "%d", &total)
+					}
+				}
+			}
+
+			// Get data rows
+			dataQuery := fmt.Sprintf("SELECT * FROM `%s`.`%s` LIMIT %d OFFSET %d;", dbName, tableName, limit, offset)
+			res, err := executeCustomSQL(dbName, dataQuery)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{
+				"total":   total,
+				"limit":   limit,
+				"offset":  offset,
+				"columns": res["columns"],
+				"rows":    res["rows"],
+			})
+		})
+
+		api.POST("/databases/:name/query", func(c *gin.Context) {
+			dbName := c.Param("name")
+			if !safeIdentifier(dbName) {
+				c.JSON(400, gin.H{"error": "Invalid database name"})
+				return
+			}
+
+			var req struct {
+				Query string `json:"query"`
+			}
+			if err := c.BindJSON(&req); err != nil || req.Query == "" {
+				c.JSON(400, gin.H{"error": "Invalid request, query is required"})
+				return
+			}
+
+			res, err := executeCustomSQL(dbName, req.Query)
+			if err != nil {
+				c.JSON(400, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, res)
+		})
+
 		// App Store Endpoints
 		api.GET("/apps", func(c *gin.Context) {
 			catalog := []StoreApp{
@@ -2440,6 +2776,418 @@ func main() {
 				}
 			})
 		})
+
+		// --- FTP API Endpoints ---
+		api.GET("/ftp", func(c *gin.Context) {
+			users, err := listFtpUsers()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(200, users)
+		})
+
+		api.POST("/ftp/add", func(c *gin.Context) {
+			var req struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+				Path     string `json:"path"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			usernamePattern := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+			if !usernamePattern.MatchString(req.Username) {
+				c.JSON(400, gin.H{"error": "Invalid username format"})
+				return
+			}
+
+			if len(req.Password) < 6 {
+				c.JSON(400, gin.H{"error": "Password must be at least 6 characters"})
+				return
+			}
+
+			if err := os.MkdirAll(req.Path, 0755); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to create directory: " + err.Error()})
+				return
+			}
+			_ = exec.Command("chown", "-R", "www-data:www-data", req.Path).Run()
+
+			cmd := exec.Command("pure-pw", "useradd", req.Username, "-u", "www-data", "-d", req.Path)
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			go func() {
+				defer stdin.Close()
+				_, _ = io.WriteString(stdin, req.Password+"\n"+req.Password+"\n")
+			}()
+
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				c.JSON(500, gin.H{"error": fmt.Sprintf("pure-pw failed: %s %s", err.Error(), string(output))})
+				return
+			}
+
+			if err := exec.Command("pure-pw", "mkdb").Run(); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to update FTP database: " + err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/ftp/delete", func(c *gin.Context) {
+			var req struct {
+				Username string `json:"username"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			output, err := exec.Command("pure-pw", "userdel", req.Username).CombinedOutput()
+			if err != nil {
+				c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to delete user: %s %s", err.Error(), string(output))})
+				return
+			}
+
+			if err := exec.Command("pure-pw", "mkdb").Run(); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to update FTP database: " + err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/ftp/password", func(c *gin.Context) {
+			var req struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			if len(req.Password) < 6 {
+				c.JSON(400, gin.H{"error": "Password must be at least 6 characters"})
+				return
+			}
+
+			cmd := exec.Command("pure-pw", "passwd", req.Username)
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			go func() {
+				defer stdin.Close()
+				_, _ = io.WriteString(stdin, req.Password+"\n"+req.Password+"\n")
+			}()
+
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to change password: %s %s", err.Error(), string(output))})
+				return
+			}
+
+			if err := exec.Command("pure-pw", "mkdb").Run(); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to update FTP database: " + err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/ftp/toggle", func(c *gin.Context) {
+			var req struct {
+				Username string `json:"username"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			data, err := os.ReadFile("/etc/pure-ftpd/pureftpd.passwd")
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			lines := strings.Split(string(data), "\n")
+			found := false
+			for i, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if trimmed == "" {
+					continue
+				}
+				isCommented := strings.HasPrefix(trimmed, "#")
+				normalized := trimmed
+				if isCommented {
+					normalized = strings.TrimPrefix(trimmed, "#")
+				}
+				parts := strings.Split(normalized, ":")
+				if len(parts) > 0 && parts[0] == req.Username {
+					found = true
+					if isCommented {
+						lines[i] = normalized
+					} else {
+						lines[i] = "#" + trimmed
+					}
+					break
+				}
+			}
+
+			if !found {
+				c.JSON(404, gin.H{"error": "User not found"})
+				return
+			}
+
+			err = os.WriteFile("/etc/pure-ftpd/pureftpd.passwd", []byte(strings.Join(lines, "\n")), 0600)
+			if err != nil {
+				c.JSON(500, gin.H{"error": "Failed to write passwd file: " + err.Error()})
+				return
+			}
+
+			if err := exec.Command("pure-pw", "mkdb").Run(); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to update FTP database: " + err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		// --- Cron API Endpoints ---
+		api.GET("/cron", func(c *gin.Context) {
+			jobs, err := listCronJobs()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(200, jobs)
+		})
+
+		api.POST("/cron/add", func(c *gin.Context) {
+			var req struct {
+				Name     string `json:"name"`
+				Schedule string `json:"schedule"`
+				Command  string `json:"command"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			if req.Name == "" || req.Schedule == "" || req.Command == "" {
+				c.JSON(400, gin.H{"error": "All fields are required"})
+				return
+			}
+
+			jobs, err := listCronJobs()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			logDir := "/var/log/cron_tasks"
+			_ = os.MkdirAll(logDir, 0755)
+
+			id := fmt.Sprintf("cron_%d", time.Now().UnixNano())
+			logPath := fmt.Sprintf("%s/%s.log", logDir, id)
+
+			newJob := CronJob{
+				ID:       id,
+				Name:     req.Name,
+				Schedule: req.Schedule,
+				Command:  req.Command,
+				Status:   "enabled",
+				LogPath:  logPath,
+				IsSystem: false,
+			}
+
+			jobs = append(jobs, newJob)
+			if err := saveCronJobs(jobs); err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/cron/delete", func(c *gin.Context) {
+			var req struct {
+				ID string `json:"id"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			jobs, err := listCronJobs()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			var remainingJobs []CronJob
+			found := false
+			for _, job := range jobs {
+				if job.ID == req.ID {
+					found = true
+					if job.LogPath != "" {
+						_ = os.Remove(job.LogPath)
+					}
+					continue
+				}
+				remainingJobs = append(remainingJobs, job)
+			}
+
+			if !found {
+				c.JSON(404, gin.H{"error": "Cronjob not found"})
+				return
+			}
+
+			if err := saveCronJobs(remainingJobs); err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/cron/toggle", func(c *gin.Context) {
+			var req struct {
+				ID string `json:"id"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			jobs, err := listCronJobs()
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			found := false
+			for i, job := range jobs {
+				if job.ID == req.ID {
+					found = true
+					if job.Status == "enabled" {
+						jobs[i].Status = "disabled"
+					} else {
+						jobs[i].Status = "enabled"
+					}
+					break
+				}
+			}
+
+			if !found {
+				c.JSON(404, gin.H{"error": "Cronjob not found"})
+				return
+			}
+
+			if err := saveCronJobs(jobs); err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.GET("/cron/log", func(c *gin.Context) {
+			id := c.Query("id")
+			if id == "" {
+				c.JSON(400, gin.H{"error": "ID is required"})
+				return
+			}
+
+			logPath := fmt.Sprintf("/var/log/cron_tasks/%s.log", id)
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					c.JSON(200, gin.H{"log": "[No logs generated yet. Executing task will write to this file.]"})
+					return
+				}
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"log": string(data)})
+		})
+
+		api.POST("/cron/log/clear", func(c *gin.Context) {
+			var req struct {
+				ID string `json:"id"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			logPath := fmt.Sprintf("/var/log/cron_tasks/%s.log", req.ID)
+			_ = os.WriteFile(logPath, []byte(""), 0644)
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		// --- Settings API Endpoints ---
+		api.GET("/settings", func(c *gin.Context) {
+			c.JSON(200, gin.H{
+				"username":     adminUser,
+				"version":      Version,
+				"go_version":   runtime.Version(),
+				"os":           runtime.GOOS + "/" + runtime.GOARCH,
+				"num_cpu":      runtime.NumCPU(),
+				"goroutines":   runtime.NumGoroutine(),
+			})
+		})
+
+		api.POST("/settings/update", func(c *gin.Context) {
+			var req struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			if req.Username == "" {
+				c.JSON(400, gin.H{"error": "Username cannot be empty"})
+				return
+			}
+
+			if req.Password != "" && len(req.Password) < 6 {
+				c.JSON(400, gin.H{"error": "Password must be at least 6 characters"})
+				return
+			}
+
+			adminUser = req.Username
+			if req.Password != "" {
+				adminPass = req.Password
+			}
+
+			if err := saveSettingsToEnv(adminUser, adminPass); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to save settings: " + err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
+		api.POST("/settings/restart", func(c *gin.Context) {
+			c.JSON(200, gin.H{"status": "ok"})
+			go func() {
+				time.Sleep(1 * time.Second)
+				_ = exec.Command("systemctl", "restart", "vps-dashboard").Run()
+				os.Exit(0)
+			}()
+		})
 	}
 
 	// 3. Static Files
@@ -2488,52 +3236,178 @@ type FirewallRule struct {
 	From   string `json:"from"`
 }
 
+type ListeningPort struct {
+	Port     string `json:"port"`
+	Protocol string `json:"protocol"`
+	Address  string `json:"address"`
+	Process  string `json:"process"`
+	Pid      string `json:"pid"`
+}
+
 type FirewallStatus struct {
-	Enabled bool           `json:"enabled"`
-	Rules   []FirewallRule `json:"rules"`
+	Enabled         bool            `json:"enabled"`
+	Logging         string          `json:"logging"`
+	DefaultIncoming string          `json:"default_incoming"`
+	DefaultOutgoing string          `json:"default_outgoing"`
+	DefaultRouted   string          `json:"default_routed"`
+	Rules           []FirewallRule  `json:"rules"`
+	ListeningPorts  []ListeningPort `json:"listening_ports"`
 }
 
 var ruleRegex = regexp.MustCompile(`^\[\s*(\d+)\]\s+(.*?)\s+(ALLOW IN|DENY IN|ALLOW OUT|DENY OUT|ALLOW|DENY)\s+(.*)$`)
 
-func getFirewallStatus() FirewallStatus {
-	cmd := exec.Command("ufw", "status", "numbered")
+func getListeningPorts() []ListeningPort {
+	var list []ListeningPort
+	cmd := exec.Command("ss", "-tlnup")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Return disabled if command fails or not installed
-		return FirewallStatus{Enabled: false, Rules: []FirewallRule{}}
+		return list
 	}
 
 	lines := strings.Split(string(output), "\n")
-	enabled := false
-	var rules []FirewallRule
+	processRegex := regexp.MustCompile(`users:\(\("([^"]+)",pid=(\d+)`)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Status: active") {
-			enabled = true
+		if !strings.HasPrefix(line, "tcp") && !strings.HasPrefix(line, "udp") {
 			continue
 		}
-		if strings.HasPrefix(line, "Status: inactive") {
-			enabled = false
-			break
+
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
 		}
 
-		match := ruleRegex.FindStringSubmatch(line)
-		if len(match) == 5 {
-			idx := 0
-			fmt.Sscanf(match[1], "%d", &idx)
-			rules = append(rules, FirewallRule{
-				Index:  idx,
-				To:     strings.TrimSpace(match[2]),
-				Action: strings.TrimSpace(match[3]),
-				From:   strings.TrimSpace(match[4]),
+		netid := fields[0]    // tcp or udp
+		localAddr := fields[4] // e.g. 0.0.0.0:3005 or [::]:8081 or *:6868
+
+		// Extract address and port
+		addr := ""
+		port := ""
+		idxColon := strings.LastIndex(localAddr, ":")
+		if idxColon != -1 {
+			addr = localAddr[:idxColon]
+			port = localAddr[idxColon+1:]
+		}
+
+		// Clean up address (remove %interface name if present, e.g. 127.0.0.53%lo)
+		if idxPercent := strings.Index(addr, "%"); idxPercent != -1 {
+			addr = addr[:idxPercent]
+		}
+
+		process := "unknown"
+		pid := "-"
+		// Try to extract process details from last column
+		processCol := fields[len(fields)-1]
+		if match := processRegex.FindStringSubmatch(processCol); len(match) == 3 {
+			process = match[1]
+			pid = match[2]
+		}
+
+		// Deduplicate: if same port, protocol and address are listed multiple times, group them
+		found := false
+		for i, item := range list {
+			if item.Port == port && item.Protocol == netid && item.Address == addr {
+				if item.Process == "unknown" && process != "unknown" {
+					list[i].Process = process
+					list[i].Pid = pid
+				}
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			list = append(list, ListeningPort{
+				Port:     port,
+				Protocol: netid,
+				Address:  addr,
+				Process:  process,
+				Pid:      pid,
 			})
 		}
 	}
 
+	return list
+}
+
+func getFirewallStatus() FirewallStatus {
+	// Parse status numbered
+	cmd := exec.Command("ufw", "status", "numbered")
+	output, err := cmd.CombinedOutput()
+	
+	enabled := false
+	var rules []FirewallRule
+
+	if err == nil {
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "Status: active") {
+				enabled = true
+				continue
+			}
+			if strings.HasPrefix(line, "Status: inactive") {
+				enabled = false
+				break
+			}
+
+			match := ruleRegex.FindStringSubmatch(line)
+			if len(match) == 5 {
+				idx := 0
+				fmt.Sscanf(match[1], "%d", &idx)
+				rules = append(rules, FirewallRule{
+					Index:  idx,
+					To:     strings.TrimSpace(match[2]),
+					Action: strings.TrimSpace(match[3]),
+					From:   strings.TrimSpace(match[4]),
+				})
+			}
+		}
+	}
+
+	// Parse status verbose for defaults and logging
+	logging := "unknown"
+	defaultIncoming := "deny"
+	defaultOutgoing := "allow"
+	defaultRouted := "deny"
+
+	cmdVerbose := exec.Command("ufw", "status", "verbose")
+	outputVerbose, errVerbose := cmdVerbose.CombinedOutput()
+	if errVerbose == nil {
+		linesVerbose := strings.Split(string(outputVerbose), "\n")
+		for _, line := range linesVerbose {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "Logging:") {
+				logging = strings.TrimSpace(strings.TrimPrefix(line, "Logging:"))
+			} else if strings.HasPrefix(line, "Default:") {
+				val := strings.TrimSpace(strings.TrimPrefix(line, "Default:"))
+				parts := strings.Split(val, ",")
+				for _, part := range parts {
+					part = strings.TrimSpace(part)
+					if strings.Contains(part, "(incoming)") {
+						defaultIncoming = strings.TrimSpace(strings.Split(part, " ")[0])
+					} else if strings.Contains(part, "(outgoing)") {
+						defaultOutgoing = strings.TrimSpace(strings.Split(part, " ")[0])
+					} else if strings.Contains(part, "(routed)") {
+						defaultRouted = strings.TrimSpace(strings.Split(part, " ")[0])
+					}
+				}
+			}
+		}
+	}
+
+	// Retrieve listening ports
+	listeningPorts := getListeningPorts()
+
 	return FirewallStatus{
-		Enabled: enabled,
-		Rules:   rules,
+		Enabled:         enabled,
+		Logging:         logging,
+		DefaultIncoming: defaultIncoming,
+		DefaultOutgoing: defaultOutgoing,
+		DefaultRouted:   defaultRouted,
+		Rules:           rules,
+		ListeningPorts:  listeningPorts,
 	}
 }
 
@@ -2576,6 +3450,106 @@ func saveDBConfig(config DBConfig) error {
 		return err
 	}
 	return os.WriteFile(getDBConfigPath(), data, 0600)
+}
+
+func safeIdentifier(s string) bool {
+	pattern := regexp.MustCompile(`^[a-zA-Z0-9_$.-]+$`)
+	return pattern.MatchString(s)
+}
+
+func getDBConnection(dbName string) (*sql.DB, error) {
+	config, err := loadDBConfig()
+	if err != nil {
+		return nil, err
+	}
+	if config.Host == "" {
+		return nil, fmt.Errorf("Database connection is not configured")
+	}
+
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
+		config.Username, config.Password, config.Host, config.Port, dbName)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+func executeCustomSQL(dbName string, query string) (gin.H, error) {
+	db, err := getDBConnection(dbName)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	trimmed := strings.TrimSpace(strings.ToLower(query))
+	isSelect := strings.HasPrefix(trimmed, "select") ||
+		strings.HasPrefix(trimmed, "show") ||
+		strings.HasPrefix(trimmed, "desc") ||
+		strings.HasPrefix(trimmed, "explain") ||
+		strings.HasPrefix(trimmed, "help")
+
+	if isSelect {
+		sqlRows, err := db.Query(query)
+		if err != nil {
+			return nil, err
+		}
+		defer sqlRows.Close()
+
+		columns, err := sqlRows.Columns()
+		if err != nil {
+			return nil, err
+		}
+
+		var rows [][]interface{}
+		for sqlRows.Next() {
+			rowValues := make([]interface{}, len(columns))
+			rowValPointers := make([]interface{}, len(columns))
+			for i := range rowValues {
+				rowValPointers[i] = &rowValues[i]
+			}
+
+			if err := sqlRows.Scan(rowValPointers...); err != nil {
+				return nil, err
+			}
+
+			formattedRow := make([]interface{}, len(columns))
+			for i, val := range rowValues {
+				if val == nil {
+					formattedRow[i] = nil
+				} else if b, ok := val.([]byte); ok {
+					formattedRow[i] = string(b)
+				} else {
+					formattedRow[i] = val
+				}
+			}
+			rows = append(rows, formattedRow)
+		}
+
+		if rows == nil {
+			rows = [][]interface{}{}
+		}
+
+		return gin.H{
+			"type":    "select",
+			"columns": columns,
+			"rows":    rows,
+		}, nil
+	} else {
+		res, err := db.Exec(query)
+		if err != nil {
+			return nil, err
+		}
+
+		rowsAffected, _ := res.RowsAffected()
+		lastInsertID, _ := res.LastInsertId()
+
+		return gin.H{
+			"type":           "exec",
+			"rows_affected":  rowsAffected,
+			"last_insert_id": lastInsertID,
+		}, nil
+	}
 }
 
 func runSQLCommand(sql string) (string, error) {
@@ -2788,3 +3762,217 @@ func fixHostDatabaseForDocker() {
 	`
 	_ = exec.Command("bash", "-c", script).Run()
 }
+
+type FtpUser struct {
+	Username string `json:"username"`
+	Path     string `json:"path"`
+	Status   string `json:"status"` // "active" or "disabled"
+}
+
+func listFtpUsers() ([]FtpUser, error) {
+	data, err := os.ReadFile("/etc/pure-ftpd/pureftpd.passwd")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []FtpUser{}, nil
+		}
+		return nil, err
+	}
+
+	users := []FtpUser{}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		status := "active"
+		if strings.HasPrefix(line, "#") {
+			status = "disabled"
+			line = strings.TrimPrefix(line, "#")
+		}
+		parts := strings.Split(line, ":")
+		if len(parts) >= 6 {
+			users = append(users, FtpUser{
+				Username: parts[0],
+				Path:     parts[5],
+				Status:   status,
+			})
+		}
+	}
+	return users, nil
+}
+
+type CronJob struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Schedule string `json:"schedule"`
+	Command  string `json:"command"`
+	Status   string `json:"status"` // "enabled" or "disabled"
+	LogPath  string `json:"log_path"`
+	IsSystem bool   `json:"is_system"`
+}
+
+func listCronJobs() ([]CronJob, error) {
+	cmd := exec.Command("crontab", "-l")
+	output, err := cmd.CombinedOutput()
+	if err != nil && !strings.Contains(string(output), "no crontab") {
+		return nil, fmt.Errorf("failed to run crontab -l: %s %w", string(output), err)
+	}
+
+	jobs := []CronJob{}
+	lines := strings.Split(string(output), "\n")
+	var currentJob *CronJob
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "# PANELD_ID:") {
+			if currentJob != nil {
+				jobs = append(jobs, *currentJob)
+			}
+			currentJob = &CronJob{
+				ID:       strings.TrimSpace(strings.TrimPrefix(trimmed, "# PANELD_ID:")),
+				Status:   "enabled",
+				IsSystem: false,
+			}
+			continue
+		}
+
+		if currentJob != nil {
+			if strings.HasPrefix(trimmed, "# PANELD_NAME:") {
+				currentJob.Name = strings.TrimSpace(strings.TrimPrefix(trimmed, "# PANELD_NAME:"))
+				continue
+			}
+			if strings.HasPrefix(trimmed, "# PANELD_STATUS:") {
+				currentJob.Status = strings.TrimSpace(strings.TrimPrefix(trimmed, "# PANELD_STATUS:"))
+				continue
+			}
+			if strings.HasPrefix(trimmed, "# PANELD_LOG:") {
+				currentJob.LogPath = strings.TrimSpace(strings.TrimPrefix(trimmed, "# PANELD_LOG:"))
+				continue
+			}
+		}
+
+		if currentJob != nil && !strings.HasPrefix(trimmed, "# PANELD_") {
+			cronLine := trimmed
+			if currentJob.Status == "disabled" && strings.HasPrefix(cronLine, "#") {
+				cronLine = strings.TrimSpace(strings.TrimPrefix(cronLine, "#"))
+			}
+
+			parts := strings.Fields(cronLine)
+			if len(parts) >= 6 {
+				currentJob.Schedule = strings.Join(parts[0:5], " ")
+				fullCommand := strings.Join(parts[5:], " ")
+				redirIndex := strings.Index(fullCommand, " > ")
+				if redirIndex != -1 {
+					currentJob.Command = strings.TrimSpace(fullCommand[:redirIndex])
+				} else {
+					currentJob.Command = fullCommand
+				}
+			} else {
+				currentJob.Command = cronLine
+			}
+			jobs = append(jobs, *currentJob)
+			currentJob = nil
+			continue
+		}
+
+		if currentJob == nil && !strings.HasPrefix(trimmed, "# PANELD_") {
+			if strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 6 {
+				schedule := strings.Join(parts[0:5], " ")
+				cmd := strings.Join(parts[5:], " ")
+				jobs = append(jobs, CronJob{
+					ID:       "system_" + fmt.Sprintf("%d", len(jobs)),
+					Name:     "System Job",
+					Schedule: schedule,
+					Command:  cmd,
+					Status:   "enabled",
+					IsSystem: true,
+				})
+			}
+		}
+	}
+
+	if currentJob != nil {
+		jobs = append(jobs, *currentJob)
+	}
+
+	return jobs, nil
+}
+
+func saveCronJobs(jobs []CronJob) error {
+	var lines []string
+	for _, job := range jobs {
+		if job.IsSystem {
+			lines = append(lines, fmt.Sprintf("%s %s", job.Schedule, job.Command))
+		} else {
+			lines = append(lines, fmt.Sprintf("# PANELD_ID: %s", job.ID))
+			lines = append(lines, fmt.Sprintf("# PANELD_NAME: %s", job.Name))
+			lines = append(lines, fmt.Sprintf("# PANELD_STATUS: %s", job.Status))
+			if job.LogPath != "" {
+				lines = append(lines, fmt.Sprintf("# PANELD_LOG: %s", job.LogPath))
+			}
+			
+			cmdLine := job.Command
+			if job.LogPath != "" {
+				cmdLine = fmt.Sprintf("%s > %s 2>&1", job.Command, job.LogPath)
+			}
+			
+			if job.Status == "disabled" {
+				lines = append(lines, fmt.Sprintf("# %s %s", job.Schedule, cmdLine))
+			} else {
+				lines = append(lines, fmt.Sprintf("%s %s", job.Schedule, cmdLine))
+			}
+		}
+		lines = append(lines, "")
+	}
+
+	tmpFile := "/tmp/new_crontab"
+	err := os.WriteFile(tmpFile, []byte(strings.Join(lines, "\n")), 0644)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpFile)
+
+	output, err := exec.Command("crontab", tmpFile).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("crontab failed: %s %w", string(output), err)
+	}
+
+	return nil
+}
+
+func saveSettingsToEnv(username, password string) error {
+	var lines []string
+	if data, err := os.ReadFile(".env"); err == nil {
+		oldLines := strings.Split(string(data), "\n")
+		for _, line := range oldLines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				key := strings.TrimSpace(parts[0])
+				if key == "ADMIN_USER" || key == "ADMIN_PASS" || key == "AUTH_TOKEN" {
+					continue
+				}
+				lines = append(lines, line)
+			}
+		}
+	}
+
+	lines = append(lines, fmt.Sprintf("ADMIN_USER=%s", username))
+	lines = append(lines, fmt.Sprintf("ADMIN_PASS=%s", password))
+	lines = append(lines, fmt.Sprintf("AUTH_TOKEN=%s", authToken))
+
+	return os.WriteFile(".env", []byte(strings.Join(lines, "\n")), 0600)
+}
+
