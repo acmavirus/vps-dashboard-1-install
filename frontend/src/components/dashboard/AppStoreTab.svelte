@@ -59,7 +59,7 @@
         headers: { Authorization: token || "" }
       })
       if (response.ok) {
-        apps = await response.json()
+        apps = await response.json() || []
       } else {
         const errData = await response.json().catch(() => ({}))
         error = errData.error || "Failed to load App Store"

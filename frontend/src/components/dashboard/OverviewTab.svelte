@@ -24,11 +24,16 @@
   export let processesCount = 0
   export let switchTab: (tab: string) => void
 
-  // Network speed states
+  // Network and Disk speed states
   let lastSent = 0
   let lastRecv = 0
   let uploadSpeed = 0
   let downloadSpeed = 0
+
+  let lastDiskRead = 0
+  let lastDiskWrite = 0
+  let diskReadSpeed = 0
+  let diskWriteSpeed = 0
 
   $: {
     if (stats) {
@@ -40,6 +45,15 @@
       }
       lastSent = stats.net_sent
       lastRecv = stats.net_recv
+
+      if (lastDiskRead > 0) {
+        diskReadSpeed = Math.max((stats.disk_read - lastDiskRead) / 3, 0)
+      }
+      if (lastDiskWrite > 0) {
+        diskWriteSpeed = Math.max((stats.disk_write - lastDiskWrite) / 3, 0)
+      }
+      lastDiskRead = stats.disk_read
+      lastDiskWrite = stats.disk_write
     }
   }
 
@@ -111,8 +125,8 @@
     activeTooltip = null
   }
 
-  // Calculate Load status as cosmetic formula: (CPU% * 0.7) + 1.2
-  $: loadStatus = stats ? Math.min((stats.cpu * 0.7) + 1.2, 100) : 0
+  // Calculate Load status as percentage of Load1 / CPUCores
+  $: loadPercent = stats ? Math.min((stats.load_1 / Math.max(stats.cpu_cores, 1)) * 100, 100) : 0
 </script>
 
 <div class="space-y-6">
@@ -143,16 +157,22 @@
                 stroke="#10b981"
                 stroke-width="6"
                 stroke-dasharray={2 * Math.PI * 42}
-                stroke-dashoffset={2 * Math.PI * 42 * (1 - loadStatus / 100)}
+                stroke-dashoffset={2 * Math.PI * 42 * (1 - loadPercent / 100)}
                 stroke-linecap="round"
                 fill="transparent"
               />
             </svg>
-            <span class="absolute text-base font-bold tabular-nums text-foreground">{loadStatus.toFixed(1)}%</span>
+            <span class="absolute text-sm font-bold tabular-nums text-foreground">{stats ? stats.load_1.toFixed(2) : "0.00"}</span>
           </div>
           <div>
-            <p class="text-xs font-semibold text-foreground">Smooth operation</p>
-            <p class="text-[10px] text-muted-foreground">Load status</p>
+            <p class="text-[10px] font-semibold text-foreground">
+              {#if stats}
+                5m: {stats.load_5.toFixed(2)} | 15m: {stats.load_15.toFixed(2)}
+              {:else}
+                --
+              {/if}
+            </p>
+            <p class="text-[10px] text-muted-foreground">Load average</p>
           </div>
         </div>
 
@@ -183,7 +203,7 @@
             <span class="absolute text-base font-bold tabular-nums text-foreground">{stats?.cpu !== undefined ? stats.cpu.toFixed(1) : "--"}%</span>
           </div>
           <div>
-            <p class="text-xs font-semibold text-foreground">1 Core(s)</p>
+            <p class="text-xs font-semibold text-foreground">{stats ? `${stats.cpu_cores} Core(s)` : "--"}</p>
             <p class="text-[10px] text-muted-foreground">CPU usage</p>
           </div>
         </div>
@@ -217,12 +237,17 @@
           <div>
             <p class="text-xs font-semibold text-foreground">
               {#if stats}
-                {formatMB(stats.ram_used)} / {formatMB(stats.ram_total)}(MB)
+                {formatMB(stats.ram_used)} / {formatMB(stats.ram_total)} MB
               {:else}
                 --
               {/if}
             </p>
             <p class="text-[10px] text-muted-foreground">RAM usage</p>
+            {#if stats && stats.swap_total > 0}
+              <p class="text-[8px] text-muted-foreground/60 mt-1 font-mono">
+                Swap: {formatMB(stats.swap_used)}/{formatMB(stats.swap_total)}M ({stats.swap_percent.toFixed(0)}%)
+              </p>
+            {/if}
           </div>
         </div>
       </div>
@@ -362,97 +387,133 @@
 
   <!-- Bottom Row: Software & Network Chart -->
   <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
-    <!-- Software Card (Left) -->
-    <div class="rounded-2xl border border-border bg-card p-6 flex flex-col justify-between">
-      <div class="mb-4">
-        <h3 class="text-sm font-bold text-foreground">Software</h3>
+    <!-- Left Column: Software + System Info stacked -->
+    <div class="space-y-6">
+      <!-- Software Card -->
+      <div class="rounded-2xl border border-border bg-card p-6 flex flex-col justify-between">
+        <div class="mb-4">
+          <h3 class="text-sm font-bold text-foreground">Software</h3>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <!-- Nginx -->
+          <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
+            <div class="flex items-center gap-3">
+              <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500 text-sm font-bold">N</span>
+              <div>
+                <p class="text-xs font-semibold text-foreground">Nginx 1.22.1</p>
+                <p class="text-[10px] text-muted-foreground">Web Server</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+              <div class="flex gap-1">
+                <button on:click={() => handleAction("nginx", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
+                  <RotateCcw size={12} />
+                </button>
+                <button on:click={() => handleAction("nginx", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
+                  <Square size={12} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- PHP 8.3 -->
+          <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
+            <div class="flex items-center gap-3">
+              <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400 text-sm font-bold">PHP</span>
+              <div>
+                <p class="text-xs font-semibold text-foreground">PHP 8.3</p>
+                <p class="text-[10px] text-muted-foreground">FPM Service</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+              <div class="flex gap-1">
+                <button on:click={() => handleAction("php8.3", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
+                  <RotateCcw size={12} />
+                </button>
+                <button on:click={() => handleAction("php8.3", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
+                  <Square size={12} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- PHP 7.4 -->
+          <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
+            <div class="flex items-center gap-3">
+              <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400 text-sm font-bold">PHP</span>
+              <div>
+                <p class="text-xs font-semibold text-foreground">PHP 7.4</p>
+                <p class="text-[10px] text-muted-foreground">Legacy FPM</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+              <div class="flex gap-1">
+                <button on:click={() => handleAction("php7.4", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
+                  <RotateCcw size={12} />
+                </button>
+                <button on:click={() => handleAction("php7.4", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
+                  <Square size={12} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- MariaDB -->
+          <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
+            <div class="flex items-center gap-3">
+              <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500 text-sm font-bold">DB</span>
+              <div>
+                <p class="text-xs font-semibold text-foreground">MariaDB</p>
+                <p class="text-[10px] text-muted-foreground">MySQL Database</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+              <div class="flex gap-1">
+                <button on:click={() => handleAction("mysql", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
+                  <RotateCcw size={12} />
+                </button>
+                <button on:click={() => handleAction("mysql", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
+                  <Square size={12} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <!-- Nginx -->
-        <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
-          <div class="flex items-center gap-3">
-            <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500 text-sm font-bold">N</span>
-            <div>
-              <p class="text-xs font-semibold text-foreground">Nginx 1.22.1</p>
-              <p class="text-[10px] text-muted-foreground">Web Server</p>
-            </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            <div class="flex gap-1">
-              <button on:click={() => handleAction("nginx", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
-                <RotateCcw size={12} />
-              </button>
-              <button on:click={() => handleAction("nginx", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
-                <Square size={12} />
-              </button>
-            </div>
-          </div>
-        </div>
 
-        <!-- PHP 8.3 -->
-        <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
-          <div class="flex items-center gap-3">
-            <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400 text-sm font-bold">PHP</span>
-            <div>
-              <p class="text-xs font-semibold text-foreground">PHP 8.3</p>
-              <p class="text-[10px] text-muted-foreground">FPM Service</p>
-            </div>
+      <!-- System Info Card -->
+      <div class="rounded-2xl border border-border bg-card p-6 space-y-4">
+        <h3 class="text-sm font-bold text-foreground">System Information</h3>
+        <div class="grid grid-cols-2 gap-4 text-[11px] sm:text-xs">
+          <div class="space-y-1">
+            <span class="text-muted-foreground block text-[9px] uppercase font-semibold">Hostname</span>
+            <span class="text-foreground font-mono font-medium truncate block" title={stats?.hostname ?? "--"}>{stats?.hostname ?? "--"}</span>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            <div class="flex gap-1">
-              <button on:click={() => handleAction("php8.3", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
-                <RotateCcw size={12} />
-              </button>
-              <button on:click={() => handleAction("php8.3", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
-                <Square size={12} />
-              </button>
-            </div>
+          <div class="space-y-1">
+            <span class="text-muted-foreground block text-[9px] uppercase font-semibold">OS Platform</span>
+            <span class="text-foreground font-medium capitalize block">{stats?.platform ?? "--"} ({stats?.os ?? "--"})</span>
           </div>
-        </div>
-
-        <!-- PHP 7.4 -->
-        <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
-          <div class="flex items-center gap-3">
-            <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400 text-sm font-bold">PHP</span>
-            <div>
-              <p class="text-xs font-semibold text-foreground">PHP 7.4</p>
-              <p class="text-[10px] text-muted-foreground">Legacy FPM</p>
-            </div>
+          <div class="col-span-2 space-y-1">
+            <span class="text-muted-foreground block text-[9px] uppercase font-semibold">CPU Model</span>
+            <span class="text-foreground font-medium block truncate" title={stats?.cpu_model ?? "Unknown CPU"}>{stats?.cpu_model ?? "Unknown CPU"}</span>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            <div class="flex gap-1">
-              <button on:click={() => handleAction("php7.4", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
-                <RotateCcw size={12} />
-              </button>
-              <button on:click={() => handleAction("php7.4", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
-                <Square size={12} />
-              </button>
-            </div>
+          <div class="space-y-1">
+            <span class="text-muted-foreground block text-[9px] uppercase font-semibold">Kernel Version</span>
+            <span class="text-foreground font-mono font-medium block truncate" title={stats?.kernel ?? "--"}>{stats?.kernel ?? "--"}</span>
           </div>
-        </div>
-
-        <!-- MariaDB -->
-        <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
-          <div class="flex items-center gap-3">
-            <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500 text-sm font-bold">DB</span>
-            <div>
-              <p class="text-xs font-semibold text-foreground">MariaDB</p>
-              <p class="text-[10px] text-muted-foreground">MySQL Database</p>
-            </div>
+          <div class="space-y-1">
+            <span class="text-muted-foreground block text-[9px] uppercase font-semibold">TCP Connections</span>
+            <span class="text-foreground font-mono font-medium block">{stats?.connections ?? 0} active</span>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            <div class="flex gap-1">
-              <button on:click={() => handleAction("mysql", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
-                <RotateCcw size={12} />
-              </button>
-              <button on:click={() => handleAction("mysql", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
-                <Square size={12} />
-              </button>
-            </div>
+          <div class="space-y-1 col-span-2">
+            <span class="text-muted-foreground block text-[9px] uppercase font-semibold">VPS System Time</span>
+            <span class="text-foreground font-mono font-medium block">
+              {stats ? new Date(stats.timestamp * 1000).toLocaleString('vi-VN', { timeZoneName: 'short' }) : "--"}
+            </span>
           </div>
         </div>
       </div>
@@ -462,31 +523,39 @@
     <div class="rounded-2xl border border-border bg-card p-6 flex flex-col justify-between space-y-4">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3 text-xs font-bold text-foreground">
-          <span class="border-b-2 border-emerald-500 pb-1 cursor-pointer">Traffic</span>
-          <span class="text-muted-foreground/60 cursor-not-allowed">Disk IO</span>
+          <span class="border-b-2 border-emerald-500 pb-1 cursor-pointer">Traffic & Disk IO</span>
+          <span class="text-muted-foreground/60 cursor-not-allowed">Detailed Stats</span>
         </div>
         <select class="rounded border border-border bg-card px-2 py-0.5 text-[10px] text-foreground focus:outline-none focus:ring-1 focus:ring-emerald-500">
-          <option>Net: All</option>
+          <option>All Interfaces</option>
         </select>
       </div>
 
-      <!-- Real-time network speed metrics -->
-      <div class="grid grid-cols-4 gap-2 text-center py-1 bg-secondary/20 rounded-xl border border-border/50">
+      <!-- Real-time network & disk speed metrics -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center p-3 bg-secondary/20 rounded-xl border border-border/50">
         <div>
-          <p class="text-[9px] text-muted-foreground">● Upstream</p>
-          <p class="text-xs font-bold text-foreground tabular-nums mt-0.5">{formatSpeed(uploadSpeed)}</p>
+          <p class="text-[9px] text-muted-foreground">● Net Upstream</p>
+          <p class="text-xs font-bold text-emerald-500 tabular-nums mt-0.5">{formatSpeed(uploadSpeed)}</p>
         </div>
         <div>
-          <p class="text-[9px] text-muted-foreground">● Downstream</p>
-          <p class="text-xs font-bold text-foreground tabular-nums mt-0.5">{formatSpeed(downloadSpeed)}</p>
+          <p class="text-[9px] text-muted-foreground">● Net Downstream</p>
+          <p class="text-xs font-bold text-blue-500 tabular-nums mt-0.5">{formatSpeed(downloadSpeed)}</p>
         </div>
         <div>
-          <p class="text-[9px] text-muted-foreground">Total sent</p>
-          <p class="text-xs font-bold text-foreground tabular-nums mt-0.5">{stats ? formatBytes(stats.net_sent) : "0 GB"}</p>
+          <p class="text-[9px] text-muted-foreground">Disk Read</p>
+          <p class="text-xs font-bold text-amber-500 tabular-nums mt-0.5">{formatSpeed(diskReadSpeed)}</p>
         </div>
         <div>
-          <p class="text-[9px] text-muted-foreground">Total received</p>
-          <p class="text-xs font-bold text-foreground tabular-nums mt-0.5">{stats ? formatBytes(stats.net_recv) : "0 GB"}</p>
+          <p class="text-[9px] text-muted-foreground">Disk Write</p>
+          <p class="text-xs font-bold text-indigo-500 tabular-nums mt-0.5">{formatSpeed(diskWriteSpeed)}</p>
+        </div>
+        <div class="col-span-2 text-left border-t border-border/40 pt-2 flex items-center justify-between text-[9px] text-muted-foreground">
+          <span>Net Sent: <strong>{stats ? formatBytes(stats.net_sent) : "0 GB"}</strong></span>
+          <span>Recv: <strong>{stats ? formatBytes(stats.net_recv) : "0 GB"}</strong></span>
+        </div>
+        <div class="col-span-2 text-left border-t border-border/40 pt-2 flex items-center justify-between text-[9px] text-muted-foreground">
+          <span>Disk Read: <strong>{stats ? formatBytes(stats.disk_read) : "0 GB"}</strong></span>
+          <span>Write: <strong>{stats ? formatBytes(stats.disk_write) : "0 GB"}</strong></span>
         </div>
       </div>
 

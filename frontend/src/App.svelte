@@ -40,6 +40,9 @@
   import FilesTab from "./components/dashboard/FilesTab.svelte"
   import DatabasesTab from "./components/dashboard/DatabasesTab.svelte"
   import AppStoreTab from "./components/dashboard/AppStoreTab.svelte"
+  import FtpTab from "./components/dashboard/FtpTab.svelte"
+  import CronTab from "./components/dashboard/CronTab.svelte"
+  import SettingsTab from "./components/dashboard/SettingsTab.svelte"
 
   import type {
     AllLogs,
@@ -422,7 +425,7 @@
   const appTabsExtended = [
     { key: "overview", label: "Home", icon: LayoutDashboard, disabled: false, description: "Sys status & system parameters" },
     { key: "domains", label: "Website", icon: Globe, disabled: false, description: "Sites, notes and domain actions" },
-    { key: "ftp", label: "FTP", icon: Key, disabled: true, description: "FTP accounts & parameters" },
+    { key: "ftp", label: "FTP", icon: Key, disabled: false, description: "FTP accounts & parameters" },
     { key: "databases", label: "Databases", icon: Database, disabled: false, description: "SQL database management" },
     { key: "docker", label: "Docker", icon: Box, disabled: false, description: "Containers and runtime status" },
     { key: "processes", label: "Monitor", icon: Cpu, disabled: false, description: "Top running processes" },
@@ -430,9 +433,9 @@
     { key: "security", label: "Security", icon: ShieldAlert, disabled: false, description: "Firewall & intrusion protection" },
     { key: "files", label: "Files", icon: HardDrive, disabled: false, description: "Web-based file explorer" },
     { key: "logs", label: "Logs", icon: FileText, disabled: false, description: "System and nginx logs" },
-    { key: "cron", label: "Cron", icon: Clock, disabled: true, description: "Scheduled task execution" },
+    { key: "cron", label: "Cron", icon: Clock, disabled: false, description: "Scheduled task execution" },
     { key: "app-store", label: "App Store", icon: ShoppingBag, disabled: false, description: "Install software & modules" },
-    { key: "settings", label: "Settings", icon: Settings, disabled: true, description: "Panel configurations" },
+    { key: "settings", label: "Settings", icon: Settings, disabled: false, description: "Panel configurations" },
   ]
 
   $: activeAppTab = appTabsExtended.find((tab) => tab.key === appTab) ?? appTabsExtended[0]
@@ -804,6 +807,12 @@
                 <DatabasesTab {token} />
               {:else if appTab === "app-store"}
                 <AppStoreTab {token} />
+              {:else if appTab === "ftp"}
+                <FtpTab {token} />
+              {:else if appTab === "cron"}
+                <CronTab {token} />
+              {:else if appTab === "settings"}
+                <SettingsTab {token} />
               {/if}
             {/if}
           </div>

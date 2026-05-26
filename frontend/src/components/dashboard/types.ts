@@ -3,6 +3,9 @@ export interface Stats {
   ram: number
   ram_total: number
   ram_used: number
+  swap_total: number
+  swap_used: number
+  swap_percent: number
   disk: number
   disk_total: number
   disk_used: number
@@ -14,6 +17,13 @@ export interface Stats {
   net_sent: number
   net_recv: number
   connections: number
+  load_1: number
+  load_5: number
+  load_15: number
+  cpu_cores: number
+  cpu_model: string
+  disk_read: number
+  disk_write: number
 }
 
 export interface LogData {
