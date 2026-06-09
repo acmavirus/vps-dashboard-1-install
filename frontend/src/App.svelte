@@ -43,6 +43,7 @@
   import DockerTab from "./components/dashboard/DockerTab.svelte"
   import NodesTab from "./components/dashboard/NodesTab.svelte"
   import DomainsTab from "./components/dashboard/DomainsTab.svelte"
+  import DomainDetailTab from "./components/dashboard/DomainDetailTab.svelte"
   import LogsTab from "./components/dashboard/LogsTab.svelte"
   import SecurityTab from "./components/dashboard/SecurityTab.svelte"
   import FilesTab from "./components/dashboard/FilesTab.svelte"
@@ -67,6 +68,7 @@
   const VERSION = "2.1.1"
 
   let sidebarCollapsed = localStorage.getItem("sidebar_collapsed") === "true"
+  let selectedDomain: DomainInfo | null = null
   let userMenuOpen = false
   let notificationsOpen = false
   let themeMenuOpen = false
@@ -462,6 +464,72 @@
     }
   }
 
+  async function handleToggleStar(domainName: string, currentStarred: boolean) {
+    const nextStarred = !currentStarred
+    // Optimistic update
+    domains = domains.map((item) =>
+      item.domain === domainName
+        ? { ...item, is_starred: nextStarred }
+        : item
+    )
+    
+    // Sort domains: starred first, then alphabetically
+    domains = [...domains].sort((a, b) => {
+      const aStarred = !!a.is_starred
+      const bStarred = !!b.is_starred
+      if (aStarred && !bStarred) return -1
+      if (!aStarred && bStarred) return 1
+      return a.domain.localeCompare(b.domain)
+    })
+
+    try {
+      const response = await fetch("/api/domains/star", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token || "",
+        },
+        body: JSON.stringify({
+          domain: domainName,
+          starred: nextStarred,
+        }),
+      })
+
+      if (!response.ok) {
+        // Revert on error
+        domains = domains.map((item) =>
+          item.domain === domainName
+            ? { ...item, is_starred: currentStarred }
+            : item
+        )
+        domains = [...domains].sort((a, b) => {
+          const aStarred = !!a.is_starred
+          const bStarred = !!b.is_starred
+          if (aStarred && !bStarred) return -1
+          if (!aStarred && bStarred) return 1
+          return a.domain.localeCompare(b.domain)
+        })
+        const data = await response.json().catch(() => ({}))
+        alert(data.error || "Failed to toggle star highlight")
+      }
+    } catch (err) {
+      // Revert on network error
+      domains = domains.map((item) =>
+        item.domain === domainName
+          ? { ...item, is_starred: currentStarred }
+          : item
+      )
+      domains = [...domains].sort((a, b) => {
+        const aStarred = !!a.is_starred
+        const bStarred = !!b.is_starred
+        if (aStarred && !bStarred) return -1
+        if (!aStarred && bStarred) return 1
+        return a.domain.localeCompare(b.domain)
+      })
+      alert("Network connection error")
+    }
+  }
+
   // Khai báo Tabs chính mở rộng theo phong cách aaPanel
   const appTabsExtended = [
     { key: "overview", label: "Home", icon: LayoutDashboard, disabled: false, description: "Sys status & system parameters" },
@@ -483,7 +551,8 @@
 
   // Khai báo Log Tabs động cho LogsTab
   $: logTabs = [
-    { key: "system", label: "System", icon: Terminal, color: "text-blue-400" },
+    { key: "system", label: "System Logs", icon: Terminal, color: "text-blue-400" },
+    { key: "panel", label: "Panel Logs", icon: FileText, color: "text-indigo-400" },
     ...(logs?.nginx_access || logs?.nginx_error
       ? [
           {
@@ -500,25 +569,14 @@
           },
         ]
       : []),
-    ...(logs?.nginx_sites?.map((site) => ({
-      key: `site:${site.domain}`,
-      label: site.domain,
-      icon: Globe,
-      color: "text-indigo-400",
-    })) ?? []),
   ] as LogTabItem[]
 
   $: currentLog = (() => {
     if (!logs) return null
     if (logTab === "system") return logs.system
+    if (logTab === "panel") return logs.panel
     if (logTab === "nginx_access") return logs.nginx_access
     if (logTab === "nginx_error") return logs.nginx_error
-
-    if (logTab.startsWith("site:")) {
-      const domain = logTab.replace("site:", "")
-      const site = logs.nginx_sites?.find((item) => item.domain === domain)
-      return siteTab === "access" ? site?.access : site?.error
-    }
 
     return null
   })()
@@ -622,7 +680,7 @@
                 appTab = tab.key
                 nav = false
               }}
-              class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors {appTab === tab.key ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}"
+              class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors {(appTab === tab.key || (tab.key === 'domains' && appTab === 'domain-detail')) ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}"
             >
               <svelte:component this={tab.icon} size={16} class="shrink-0" />
               <span class="text-xs">{tab.label}</span>
@@ -674,9 +732,9 @@
               <button
                 type="button"
                 on:click={() => appTab = tab.key}
-                class="flex w-full items-center rounded-lg px-3 py-2 text-left transition-colors {sidebarCollapsed ? 'justify-center' : 'gap-3'} {appTab === tab.key ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}"
+                class="flex w-full items-center rounded-lg px-3 py-2 text-left transition-colors {sidebarCollapsed ? 'justify-center' : 'gap-3'} {(appTab === tab.key || (tab.key === 'domains' && appTab === 'domain-detail')) ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}"
               >
-                <svelte:component this={tab.icon} size={16} class="shrink-0 {appTab === tab.key ? 'text-primary' : ''}" />
+                <svelte:component this={tab.icon} size={16} class="shrink-0 {(appTab === tab.key || (tab.key === 'domains' && appTab === 'domain-detail')) ? 'text-primary' : ''}" />
                 {#if !sidebarCollapsed}
                   <span class="text-xs truncate">{tab.label}</span>
                 {/if}
@@ -981,6 +1039,21 @@
                 onScan={handleScanDomains}
                 scanning={domainScanning}
                 onRefresh={poll}
+                onToggleStar={handleToggleStar}
+                onSelectDomain={(dom) => {
+                  selectedDomain = dom
+                  appTab = "domain-detail"
+                }}
+              />
+            {:else if appTab === "domain-detail" && selectedDomain}
+              <DomainDetailTab
+                {token}
+                domain={selectedDomain}
+                {logs}
+                onBack={() => {
+                  selectedDomain = null
+                  appTab = "domains"
+                }}
               />
             {:else if appTab === "logs"}
               <LogsTab

@@ -76,6 +76,7 @@ export interface DomainInfo {
   status: string
   code: number
   note?: string
+  is_starred?: boolean
 }
 
 export interface DomainDeleteState {

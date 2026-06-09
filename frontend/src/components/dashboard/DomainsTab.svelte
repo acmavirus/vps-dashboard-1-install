@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RefreshCw, Trash2, Plus, X, Globe, ShieldCheck, Database, ArrowRight, Loader2 } from "lucide-svelte"
+  import { RefreshCw, Trash2, Plus, X, Globe, ShieldCheck, Database, ArrowRight, Loader2, Star } from "lucide-svelte"
   import type { DomainInfo, DomainDeleteState, DomainNoteState } from "./types"
 
   export let token: string | null = null
@@ -9,6 +9,8 @@
   export let onScan: () => void
   export let scanning: boolean
   export let onRefresh: () => void
+  export let onToggleStar: (domainName: string, currentStarred: boolean) => void
+  export let onSelectDomain: (domain: DomainInfo) => void
 
   // Create website states
   let showCreateModal = false
@@ -133,8 +135,26 @@
             <tr class="hover:bg-secondary/10">
               <td class="px-6 py-4 font-normal">
                 <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    on:click={() => onToggleStar(domain.domain, !!domain.is_starred)}
+                    class="focus:outline-none transition-transform hover:scale-110 active:scale-95 flex items-center justify-center"
+                    title={domain.is_starred ? "Bỏ nổi bật" : "Nổi bật sao vàng"}
+                  >
+                    {#if domain.is_starred}
+                      <Star size={14} class="text-amber-400 fill-amber-400" />
+                    {:else}
+                      <Star size={14} class="text-muted-foreground/35 hover:text-amber-400/80 transition-colors" />
+                    {/if}
+                  </button>
                   <Globe size={14} class="text-muted-foreground" />
-                  <span class="font-medium text-foreground">{domain.domain}</span>
+                  <button
+                    type="button"
+                    on:click={() => onSelectDomain(domain)}
+                    class="font-semibold text-foreground hover:text-primary hover:underline text-left transition-colors font-sans"
+                  >
+                    {domain.domain}
+                  </button>
                 </div>
               </td>
               <td class="max-w-[320px] px-6 py-4 text-muted-foreground whitespace-pre-line leading-relaxed">
@@ -381,4 +401,5 @@
       </div>
     </div>
   {/if}
+
 </div>

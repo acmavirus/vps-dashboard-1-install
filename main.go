@@ -100,10 +100,11 @@ type DockerInfo struct {
 }
 
 type DomainInfo struct {
-	Domain string `json:"domain"`
-	Status string `json:"status"` // online, offline
-	Code   int    `json:"code"`
-	Note   string `json:"note,omitempty"`
+	Domain    string `json:"domain"`
+	Status    string `json:"status"` // online, offline
+	Code      int    `json:"code"`
+	Note      string `json:"note,omitempty"`
+	IsStarred bool   `json:"is_starred"`
 }
 
 type domainPaths struct {
@@ -190,6 +191,56 @@ func updateDomainNote(domain string, note string) error {
 	}
 
 	if err := saveDomainNotes(notes); err != nil {
+		return err
+	}
+
+	clearDomainCache()
+	return nil
+}
+
+func getDomainStarsPath() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(".", "data", "domain-stars.json")
+	}
+	return filepath.Join("/usr/local/bin", "data", "domain-stars.json")
+}
+
+func loadDomainStars() map[string]bool {
+	path := getDomainStarsPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]bool{}
+	}
+
+	stars := map[string]bool{}
+	if err := json.Unmarshal(data, &stars); err != nil {
+		return map[string]bool{}
+	}
+	return stars
+}
+
+func saveDomainStars(stars map[string]bool) error {
+	path := getDomainStarsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(stars, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func updateDomainStar(domain string, starred bool) error {
+	stars := loadDomainStars()
+	if !starred {
+		delete(stars, domain)
+	} else {
+		stars[domain] = true
+	}
+
+	if err := saveDomainStars(stars); err != nil {
 		return err
 	}
 
@@ -807,12 +858,23 @@ func getPM2Stats() interface{} {
 
 func getDomains(scan bool) []DomainInfo {
 	notes := loadDomainNotes()
+	stars := loadDomainStars()
 	
 	// Nếu không yêu cầu quét và đã có cache, trả về cache
 	if !scan && len(cachedDomains) > 0 {
 		for i := range cachedDomains {
 			cachedDomains[i].Note = notes[cachedDomains[i].Domain]
+			cachedDomains[i].IsStarred = stars[cachedDomains[i].Domain]
 		}
+		sort.Slice(cachedDomains, func(i, j int) bool {
+			if cachedDomains[i].IsStarred && !cachedDomains[j].IsStarred {
+				return true
+			}
+			if !cachedDomains[i].IsStarred && cachedDomains[j].IsStarred {
+				return false
+			}
+			return cachedDomains[i].Domain < cachedDomains[j].Domain
+		})
 		return cachedDomains
 	}
 
@@ -850,7 +912,13 @@ func getDomains(scan bool) []DomainInfo {
 					code = resp.StatusCode
 					resp.Body.Close()
 				}
-				ch <- resChan{index, DomainInfo{Domain: domain, Status: status, Code: code, Note: notes[domain]}}
+				ch <- resChan{index, DomainInfo{
+					Domain:    domain,
+					Status:    status,
+					Code:      code,
+					Note:      notes[domain],
+					IsStarred: stars[domain],
+				}}
 			}(i, d)
 		}
 
@@ -873,11 +941,23 @@ func getDomains(scan bool) []DomainInfo {
 					break
 				}
 			}
-			results[i] = DomainInfo{Domain: d, Status: status, Code: code, Note: notes[d]}
+			results[i] = DomainInfo{
+				Domain:    d,
+				Status:    status,
+				Code:      code,
+				Note:      notes[d],
+				IsStarred: stars[d],
+			}
 		}
 	}
 
 	sort.Slice(results, func(i, j int) bool {
+		if results[i].IsStarred && !results[j].IsStarred {
+			return true
+		}
+		if !results[i].IsStarred && results[j].IsStarred {
+			return false
+		}
 		return results[i].Domain < results[j].Domain
 	})
 
@@ -896,11 +976,140 @@ func getTail(path string, lines int) string {
 	return string(output)
 }
 
+func getPanelLogs(lines int) string {
+	if runtime.GOOS == "windows" {
+		return "Panel log viewer only supports Linux (Simulation Mode)."
+	}
+	cmd := exec.Command("journalctl", "-u", "vps-dashboard", "-n", fmt.Sprintf("%d", lines), "--no-pager")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "Failed to fetch panel logs: " + err.Error()
+	}
+	return string(output)
+}
+
+func ensureLogFileExists(path string) {
+	if runtime.GOOS == "windows" {
+		dir := filepath.Dir(path)
+		_ = os.MkdirAll(dir, 0755)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			_ = os.WriteFile(path, []byte(""), 0644)
+		}
+		return
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// Create empty file
+		_ = os.WriteFile(path, []byte(""), 0640)
+		// Change ownership to www-data:adm (Nginx log standard on Ubuntu)
+		_ = exec.Command("chown", "www-data:adm", path).Run()
+		_ = exec.Command("chmod", "640", path).Run()
+	}
+}
+
+func autoHealNginxLogs() {
+	paths := getDomainPaths()
+	nginxDir := paths.nginxLogDir
+	sitesAvailableDir := paths.sitesAvailableDir
+	sitesEnabledDir := paths.sitesEnabledDir
+
+	if runtime.GOOS == "windows" {
+		_ = os.MkdirAll(nginxDir, 0755)
+		_ = os.MkdirAll(sitesAvailableDir, 0755)
+		_ = os.MkdirAll(sitesEnabledDir, 0755)
+	}
+
+	files, err := os.ReadDir(sitesAvailableDir)
+	if err != nil {
+		return
+	}
+
+	nginxChanged := false
+
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		name := f.Name()
+		if name == "default" || name == "phpmyadmin" {
+			continue
+		}
+
+		domain := strings.TrimSuffix(name, ".conf")
+		configPath := filepath.Join(sitesAvailableDir, name)
+
+		contentBytes, err := os.ReadFile(configPath)
+		if err != nil {
+			continue
+		}
+		content := string(contentBytes)
+
+		// Check if it's an active config (has server { block)
+		if !strings.Contains(strings.ToLower(content), "server {") && !strings.Contains(strings.ToLower(content), "server{") {
+			continue
+		}
+
+		// Check if log files are configured
+		hasAccess := strings.Contains(content, "access_log")
+		hasError := strings.Contains(content, "error_log")
+
+		// If either is missing, we insert it into the config file
+		if !hasAccess || !hasError {
+			// Find the first occurrence of "server {" or "server{"
+			// and insert the log configurations
+			idx := strings.Index(strings.ToLower(content), "server {")
+			insertLen := len("server {")
+			if idx == -1 {
+				idx = strings.Index(strings.ToLower(content), "server{")
+				insertLen = len("server{")
+			}
+
+			if idx != -1 {
+				var insertLines string
+				if !hasAccess {
+					accLogPath := filepath.Join(nginxDir, domain+"_access.log")
+					// Use forward slashes for Nginx config paths even on Windows compatibility
+					accLogPathStr := filepath.ToSlash(accLogPath)
+					insertLines += fmt.Sprintf("\n    access_log %s;", accLogPathStr)
+				}
+				if !hasError {
+					errLogPath := filepath.Join(nginxDir, domain+"_error.log")
+					errLogPathStr := filepath.ToSlash(errLogPath)
+					insertLines += fmt.Sprintf("\n    error_log %s;", errLogPathStr)
+				}
+
+				newContent := content[:idx+insertLen] + insertLines + content[idx+insertLen:]
+				if err := os.WriteFile(configPath, []byte(newContent), 0644); err == nil {
+					nginxChanged = true
+				}
+			}
+		}
+
+		// Ensure the log files actually exist on disk with correct permissions
+		accLogPath := filepath.Join(nginxDir, domain+"_access.log")
+		errLogPath := filepath.Join(nginxDir, domain+"_error.log")
+		ensureLogFileExists(accLogPath)
+		ensureLogFileExists(errLogPath)
+	}
+
+	// If any Nginx configs were updated, reload Nginx (only on Linux)
+	if nginxChanged && runtime.GOOS != "windows" {
+		// Test config first
+		if err := exec.Command("nginx", "-t").Run(); err == nil {
+			_ = exec.Command("systemctl", "reload", "nginx").Run()
+		}
+	}
+}
+
 func getAllLogs() map[string]interface{} {
 	logs := map[string]interface{}{
 		"system": gin.H{
 			"content": getTail("/var/log/syslog", 30),
 			"path":    "/var/log/syslog",
+		},
+		"panel": gin.H{
+			"content": getPanelLogs(100),
+			"path":    "journalctl -u vps-dashboard -n 100",
 		},
 	}
 
@@ -934,11 +1143,12 @@ func getAllLogs() map[string]interface{} {
 	logFiles, _ := os.ReadDir(nginxDir)
 	sitesMap := make(map[string]map[string]gin.H)
 
-	// Pre-fill from sites-enabled
 	for _, d := range domains {
 		sitesMap[d] = make(map[string]gin.H)
 		accPath := nginxDir + d + "_access.log"
 		errPath := nginxDir + d + "_error.log"
+		ensureLogFileExists(accPath)
+		ensureLogFileExists(errPath)
 		sitesMap[d]["access"] = gin.H{"content": getTail(accPath, 30), "path": accPath}
 		sitesMap[d]["error"] = gin.H{"content": getTail(errPath, 30), "path": errPath}
 	}
@@ -1001,6 +1211,9 @@ func getAllLogs() map[string]interface{} {
 
 func main() {
 	_ = godotenv.Load(".env")
+
+	// Scan and auto-heal missing Nginx logs
+	autoHealNginxLogs()
 
 	// Cache CPU hardware specs at startup
 	if info, err := cpu.Info(); err == nil && len(info) > 0 {
@@ -1130,6 +1343,132 @@ func main() {
 			c.JSON(200, getDomains(scan))
 		})
 
+		api.POST("/domains/star", func(c *gin.Context) {
+			var req struct {
+				Domain  string `json:"domain"`
+				Starred bool   `json:"starred"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			domain, err := sanitizeDomain(req.Domain)
+			if err != nil {
+				c.JSON(400, gin.H{"error": "Domain is not allowed"})
+				return
+			}
+
+			if err := updateDomainStar(domain, req.Starred); err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{
+				"status":  "ok",
+				"domain":  domain,
+				"starred": req.Starred,
+			})
+		})
+
+		api.GET("/domains/config", func(c *gin.Context) {
+			domain := c.Query("domain")
+			if domain == "" {
+				c.JSON(400, gin.H{"error": "Domain is required"})
+				return
+			}
+			domain, err := sanitizeDomain(domain)
+			if err != nil {
+				c.JSON(400, gin.H{"error": "Invalid domain"})
+				return
+			}
+
+			configPath, err := findDomainConfigPath(domain)
+			if err != nil {
+				c.JSON(404, gin.H{"error": "Configuration not found for domain"})
+				return
+			}
+
+			content, err := os.ReadFile(configPath)
+			if err != nil {
+				c.JSON(500, gin.H{"error": "Failed to read config file: " + err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{
+				"domain":  domain,
+				"content": string(content),
+				"path":    configPath,
+			})
+		})
+
+		api.POST("/domains/config", func(c *gin.Context) {
+			var req struct {
+				Domain  string `json:"domain"`
+				Content string `json:"content"`
+			}
+			if err := c.BindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"error": "Invalid request"})
+				return
+			}
+
+			domain, err := sanitizeDomain(req.Domain)
+			if err != nil {
+				c.JSON(400, gin.H{"error": "Invalid domain"})
+				return
+			}
+
+			configPath, err := findDomainConfigPath(domain)
+			if err != nil {
+				c.JSON(404, gin.H{"error": "Configuration not found for domain"})
+				return
+			}
+
+			if runtime.GOOS == "windows" {
+				if err := os.WriteFile(configPath, []byte(req.Content), 0644); err != nil {
+					c.JSON(500, gin.H{"error": "Failed to write config file: " + err.Error()})
+					return
+				}
+				c.JSON(200, gin.H{"status": "ok"})
+				return
+			}
+
+			// Under Linux:
+			// 1. Back up existing config
+			oldContent, err := os.ReadFile(configPath)
+			if err != nil {
+				c.JSON(500, gin.H{"error": "Failed to read existing config: " + err.Error()})
+				return
+			}
+
+			// 2. Write new config
+			if err := os.WriteFile(configPath, []byte(req.Content), 0644); err != nil {
+				c.JSON(500, gin.H{"error": "Failed to write config file: " + err.Error()})
+				return
+			}
+
+			// 3. Validate with nginx -t
+			cmd := exec.Command("nginx", "-t")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				// Restore backup
+				_ = os.WriteFile(configPath, oldContent, 0644)
+				c.JSON(400, gin.H{"error": "Invalid Nginx configuration:\n" + string(output)})
+				return
+			}
+
+			// 4. Reload Nginx
+			if err := reloadNginx(); err != nil {
+				// Restore backup
+				_ = os.WriteFile(configPath, oldContent, 0644)
+				_ = reloadNginx()
+				c.JSON(500, gin.H{"error": "Failed to reload Nginx: " + err.Error()})
+				return
+			}
+
+			c.JSON(200, gin.H{"status": "ok"})
+		})
+
 		api.POST("/domains/delete", func(c *gin.Context) {
 			var req struct {
 				Domain     string `json:"domain"`
@@ -1240,28 +1579,38 @@ func main() {
 			var nginxConfig string
 			if req.Type == "static" {
 				webRoot := filepath.Join("/home", domain)
+				accLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_access.log"))
+				errLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_error.log"))
 				nginxConfig = fmt.Sprintf(`server {
     listen 80;
     server_name %s;
     root %s;
     index index.html index.htm;
 
+    access_log %s;
+    error_log %s;
+
     location / {
         try_files $uri $uri/ =404;
     }
 }
-`, domain, webRoot)
+`, domain, webRoot, accLogPath, errLogPath)
 			} else if req.Type == "php" {
 				webRoot := filepath.Join("/home", domain)
 				sockPath := "/run/php/php8.3-fpm.sock"
 				if req.PHPVersion == "7.4" {
 					sockPath = "/run/php/php7.4-fpm.sock"
 				}
+				accLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_access.log"))
+				errLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_error.log"))
 				nginxConfig = fmt.Sprintf(`server {
     listen 80;
     server_name %s;
     root %s;
     index index.php index.html index.htm;
+
+    access_log %s;
+    error_log %s;
 
     location / {
         try_files $uri $uri/ /index.php?$query_string;
@@ -1272,11 +1621,16 @@ func main() {
         fastcgi_pass unix:%s;
     }
 }
-`, domain, webRoot, sockPath)
+`, domain, webRoot, accLogPath, errLogPath, sockPath)
 			} else if req.Type == "proxy" {
+				accLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_access.log"))
+				errLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_error.log"))
 				nginxConfig = fmt.Sprintf(`server {
     listen 80;
     server_name %s;
+
+    access_log %s;
+    error_log %s;
 
     location / {
         proxy_pass %s;
@@ -1290,7 +1644,7 @@ func main() {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
-`, domain, req.ProxyPass)
+`, domain, accLogPath, errLogPath, req.ProxyPass)
 			} else {
 				c.JSON(400, gin.H{"error": "Invalid website type"})
 				return
@@ -1324,6 +1678,12 @@ func main() {
 				noteStr := strings.Join(noteContent, "\n")
 				_ = updateDomainNote(domain, noteStr)
 			}
+
+			// Ensure log files exist on disk with correct permissions/owners
+			accLogPath := filepath.Join(paths.nginxLogDir, domain+"_access.log")
+			errLogPath := filepath.Join(paths.nginxLogDir, domain+"_error.log")
+			ensureLogFileExists(accLogPath)
+			ensureLogFileExists(errLogPath)
 
 			// Reload Nginx
 			if runtime.GOOS != "windows" {
@@ -3707,9 +4067,16 @@ func createNginxProxy(domain string, port string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
+
+	accLogPath := fmt.Sprintf("/var/log/nginx/%s_access.log", domain)
+	errLogPath := fmt.Sprintf("/var/log/nginx/%s_error.log", domain)
+
 	configContent := fmt.Sprintf(`server {
     listen 80;
     server_name %s;
+
+    access_log %s;
+    error_log %s;
 
     location / {
         proxy_pass http://127.0.0.1:%s;
@@ -3723,7 +4090,7 @@ func createNginxProxy(domain string, port string) error {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
-`, domain, port)
+`, domain, accLogPath, errLogPath, port)
 
 	availablePath := fmt.Sprintf("/etc/nginx/sites-available/%s.conf", domain)
 	enabledPath := fmt.Sprintf("/etc/nginx/sites-enabled/%s.conf", domain)
@@ -3739,6 +4106,10 @@ func createNginxProxy(domain string, port string) error {
 		return fmt.Errorf("failed to symlink nginx config: %w", err)
 	}
 
+	// Ensure the log files exist with correct permissions/owners before Nginx loads them
+	ensureLogFileExists(accLogPath)
+	ensureLogFileExists(errLogPath)
+
 	return reloadNginx()
 }
 
@@ -3751,6 +4122,10 @@ func deleteNginxProxy(domain string) error {
 
 	_ = os.Remove(enabledPath)
 	_ = os.Remove(availablePath)
+
+	// Clean up Nginx log files for this proxy domain
+	_ = os.Remove(fmt.Sprintf("/var/log/nginx/%s_access.log", domain))
+	_ = os.Remove(fmt.Sprintf("/var/log/nginx/%s_error.log", domain))
 
 	return reloadNginx()
 }
