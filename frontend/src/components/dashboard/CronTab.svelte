@@ -478,7 +478,7 @@
             <textarea 
               bind:value={addCommand}
               rows={4}
-              placeholder="e.g. bash /var/www/my-script.sh"
+              placeholder="e.g. bash /home/my-script.sh"
               class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
               required
             />

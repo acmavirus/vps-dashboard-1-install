@@ -467,6 +467,17 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 		result.Deleted = append(result.Deleted, "docker-container:"+dockerApp.ID)
 		result.Deleted = append(result.Deleted, "docker-volume:"+dockerApp.ID+"_data")
 
+		if deleteRoot {
+			appRoot := filepath.Join("/home", domain)
+			if runtime.GOOS == "windows" {
+				appRoot = filepath.Join(".", "logs", "www", domain)
+			}
+			if isAllowedRootDeletePath(appRoot) {
+				_ = os.RemoveAll(appRoot)
+				result.Deleted = append(result.Deleted, "directory:"+appRoot)
+			}
+		}
+
 		// 3. Drop DB and DB user
 		if dockerApp.DBName != "" {
 			_, _ = runSQLCommand(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%';", dockerApp.DBUser))
@@ -1184,7 +1195,7 @@ func main() {
 
 			// Handle directories and sample files if static/php
 			if req.Type == "static" || req.Type == "php" {
-				webRoot := filepath.Join("/var/www", domain)
+				webRoot := filepath.Join("/home", domain)
 				if runtime.GOOS == "windows" {
 					webRoot = filepath.Join(".", "logs", "www", domain)
 				}
@@ -1228,7 +1239,7 @@ func main() {
 			// Generate Nginx Configuration
 			var nginxConfig string
 			if req.Type == "static" {
-				webRoot := filepath.Join("/var/www", domain)
+				webRoot := filepath.Join("/home", domain)
 				nginxConfig = fmt.Sprintf(`server {
     listen 80;
     server_name %s;
@@ -1241,7 +1252,7 @@ func main() {
 }
 `, domain, webRoot)
 			} else if req.Type == "php" {
-				webRoot := filepath.Join("/var/www", domain)
+				webRoot := filepath.Join("/home", domain)
 				sockPath := "/run/php/php8.3-fpm.sock"
 				if req.PHPVersion == "7.4" {
 					sockPath = "/run/php/php7.4-fpm.sock"
@@ -2429,6 +2440,24 @@ func main() {
 			// Pre-cleanup: if containerID exists in docker (e.g. from an orphaned failed run), force remove it first to avoid exit status 125 conflict
 			_ = exec.Command("docker", "rm", "-f", containerID).Run()
 
+			// Determine host root directory for CMS/App codebases
+			appRoot := filepath.Join("/home", req.Domain)
+			if req.Domain == "" {
+				appRoot = filepath.Join("/home", containerID)
+			}
+			if runtime.GOOS == "windows" {
+				appRoot = filepath.Join(".", "logs", "www", containerID)
+			}
+
+			// Pre-create host root directory if it's a CMS/web app to ensure correct permissions
+			if req.ID == "wordpress-app" || req.ID == "joomla-app" || req.ID == "drupal-app" || req.ID == "ghost-app" || req.ID == "prestashop-app" {
+				if err := os.MkdirAll(appRoot, 0755); err != nil {
+					c.JSON(500, gin.H{"error": "Failed to create application root: " + err.Error()})
+					return
+				}
+				_ = exec.Command("chown", "-R", "www-data:www-data", appRoot).Run()
+			}
+
 			switch req.ID {
 			case "nginx-proxy-manager":
 				if port == "" {
@@ -2518,7 +2547,7 @@ func main() {
 					"--add-host", "host.docker.internal:host-gateway",
 					"--restart", "unless-stopped",
 					"-p", port+":80",
-					"-v", containerID+"_data:/var/www/html",
+					"-v", appRoot+":/var/www/html",
 					"-e", "WORDPRESS_DB_HOST="+dbHostPortForDocker,
 					"-e", "WORDPRESS_DB_USER="+wpDBUser,
 					"-e", "WORDPRESS_DB_PASSWORD="+wpDBPass,
@@ -2548,7 +2577,7 @@ func main() {
 					"--add-host", "host.docker.internal:host-gateway",
 					"--restart", "unless-stopped",
 					"-p", port+":80",
-					"-v", containerID+"_data:/var/www/html",
+					"-v", appRoot+":/var/www/html",
 					"-e", "JOOMLA_DB_HOST="+dbHostPortForDocker,
 					"-e", "JOOMLA_DB_USER="+wpDBUser,
 					"-e", "JOOMLA_DB_PASSWORD="+wpDBPass,
@@ -2571,7 +2600,7 @@ func main() {
 					"--add-host", "host.docker.internal:host-gateway",
 					"--restart", "unless-stopped",
 					"-p", port+":80",
-					"-v", containerID+"_data:/var/www/html",
+					"-v", appRoot+":/var/www/html",
 					"drupal:latest")
 			case "ghost-app":
 				if port == "" {
@@ -2601,7 +2630,7 @@ func main() {
 					"--add-host", "host.docker.internal:host-gateway",
 					"--restart", "unless-stopped",
 					"-p", port+":2368",
-					"-v", containerID+"_data:/var/lib/ghost/content",
+					"-v", appRoot+":/var/lib/ghost/content",
 					"-e", "url="+ghostURL,
 					"-e", "database__client=mysql",
 					"-e", "database__connection__host="+dbHostForDocker,
@@ -2629,12 +2658,13 @@ func main() {
 				}
 				dbHostPortForDocker := fmt.Sprintf("%s:%s", dbHostForDocker, dbConfig.Port)
 
+				os.MkdirAll(appRoot, 0755)
 				runCmd = exec.Command("docker", "run", "-d",
 					"--name", containerID,
 					"--add-host", "host.docker.internal:host-gateway",
 					"--restart", "unless-stopped",
 					"-p", port+":80",
-					"-v", containerID+"_data:/var/www/html",
+					"-v", appRoot+":/var/www/html",
 					"-e", "DB_SERVER="+dbHostPortForDocker,
 					"-e", "DB_USER="+wpDBUser,
 					"-e", "DB_PASSWD="+wpDBPass,

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, afterUpdate } from "svelte"
+  import { fade, slide } from "svelte/transition"
   import {
     LayoutDashboard,
     Globe,
@@ -27,7 +28,14 @@
     Clock,
     Activity,
     ChevronRight,
-    Plus
+    Plus,
+    Search,
+    Bell,
+    ChevronDown,
+    ChevronLeft,
+    Sun,
+    Moon,
+    Palette
   } from "lucide-svelte"
 
   import OverviewTab from "./components/dashboard/OverviewTab.svelte"
@@ -57,6 +65,31 @@
   } from "./components/dashboard/types"
 
   const VERSION = "2.1.1"
+
+  let sidebarCollapsed = localStorage.getItem("sidebar_collapsed") === "true"
+  let userMenuOpen = false
+  let notificationsOpen = false
+  let themeMenuOpen = false
+
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed
+    localStorage.setItem("sidebar_collapsed", String(sidebarCollapsed))
+  }
+
+  function closeAllMenus() {
+    userMenuOpen = false
+    notificationsOpen = false
+    themeMenuOpen = false
+  }
+
+  const themesList = [
+    { key: "aapanel", label: "aaPanel Green", color: "bg-emerald-500" },
+    { key: "slate", label: "Slate Onyx", color: "bg-slate-700" },
+    { key: "violet", label: "Aurora Violet", color: "bg-violet-600" },
+    { key: "forest", label: "Nordic Forest", color: "bg-green-700" },
+    { key: "abyss", label: "Oceanic Abyss", color: "bg-blue-800" },
+    { key: "amber", label: "Sunset Amber", color: "bg-amber-600" },
+  ]
 
   let currentTheme = localStorage.getItem("selected_theme") || "aapanel"
   let isDark = localStorage.getItem("selected_dark") !== "false"
@@ -89,6 +122,14 @@
   let containers: ContainerInfo[] = []
   let pm2: Pm2Process[] = []
   let domains: DomainInfo[] = []
+
+  $: systemNotifications = [
+    ...(stats && stats.cpu > 80 ? [{ id: "cpu", type: "error", title: "High CPU Usage", desc: `CPU usage is at ${stats.cpu.toFixed(1)}%`, time: "Just now" }] : []),
+    ...(stats && (stats.mem_used / stats.mem_total) * 100 > 90 ? [{ id: "mem", type: "error", title: "High Memory Usage", desc: `Memory is at ${((stats.mem_used / stats.mem_total) * 100).toFixed(1)}%`, time: "Just now" }] : []),
+    ...(stats && stats.disk_percent > 85 ? [{ id: "disk", type: "warning", title: "Disk Space Warning", desc: `Disk space used is at ${stats.disk_percent.toFixed(1)}%`, time: "Just now" }] : []),
+    ...(containers.some(c => c.State === "exited") ? [{ id: "docker", type: "warning", title: "Container Exited", desc: "One or more Docker containers have exited", time: "1m ago" }] : []),
+    ...(pm2.some(p => p.status !== "online") ? [{ id: "pm2", type: "error", title: "Node App Offline", desc: "One or more PM2 apps are offline", time: "2m ago" }] : []),
+  ]
   
   let domainDelete: DomainDeleteState | null = null
   let domainDeleteLoading = false
@@ -491,6 +532,8 @@
   const setDomainNote = (val: DomainNoteState) => { domainNote = val }
 </script>
 
+<svelte:window on:click={closeAllMenus} />
+
 {#if !token}
   <div class="flex min-h-screen items-center justify-center bg-background p-4 text-foreground">
     <div class="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl">
@@ -539,35 +582,35 @@
     </div>
   </div>
 {:else}
-  <div class="min-h-screen bg-background text-foreground">
+  <div class="flex h-screen w-screen overflow-hidden bg-background text-foreground">
     <!-- Mobile Sidebar overlay -->
     {#if nav}
       <button 
         type="button" 
-        class="fixed inset-0 z-40 bg-black/50 lg:hidden cursor-default border-none outline-none" 
+        class="fixed inset-0 z-40 bg-black/60 lg:hidden cursor-default border-none outline-none transition-opacity" 
         on:click={() => nav = false} 
       />
     {/if}
 
     <!-- Mobile Sidebar Drawer -->
     <aside
-      class="fixed inset-y-0 left-0 z-50 w-72 border-r border-border bg-card transition-transform duration-300 lg:hidden {nav ? '' : '-translate-x-full'}"
+      class="fixed inset-y-0 left-0 z-50 flex flex-col w-64 border-r border-border bg-card transition-transform duration-300 lg:hidden {nav ? 'translate-x-0' : '-translate-x-full'}"
     >
-      <div class="flex items-center justify-between border-b border-border p-6">
+      <div class="flex items-center justify-between border-b border-border px-5 h-16 shrink-0">
         <div class="flex items-center gap-2">
-          <span class="h-6 w-6 rounded bg-emerald-500 flex items-center justify-center text-white text-xs font-bold font-mono">aa</span>
-          <span class="text-sm font-bold text-foreground">AcmaPanel</span>
+          <span class="h-8 w-8 rounded bg-primary text-primary-foreground flex items-center justify-center font-bold font-mono text-sm shadow-sm">ap</span>
+          <span class="text-sm font-bold tracking-tight text-foreground">AcmaPanel</span>
         </div>
-        <button type="button" on:click={() => nav = false}>
-          <X size={18} class="text-muted-foreground" />
+        <button type="button" class="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground transition-colors" on:click={() => nav = false}>
+          <X size={16} />
         </button>
       </div>
-      <nav class="space-y-1 p-4 overflow-y-auto max-h-[calc(100vh-80px)]">
+      <nav class="flex-1 space-y-1 p-3 overflow-y-auto">
         {#each appTabsExtended as tab (tab.key)}
           {#if tab.disabled}
-            <div class="flex items-center justify-between rounded-xl px-4 py-2.5 text-xs text-muted-foreground/40 cursor-not-allowed">
+            <div class="flex items-center justify-between rounded-lg px-3 py-2 text-xs text-muted-foreground/40 cursor-not-allowed select-none">
               <span class="flex items-center gap-3">
-                <svelte:component this={tab.icon} size={15} />
+                <svelte:component this={tab.icon} size={16} />
                 <span>{tab.label}</span>
               </span>
               <span class="text-[8px] bg-secondary px-1 py-0.2 rounded text-muted-foreground/30 font-mono">SOON</span>
@@ -579,245 +622,397 @@
                 appTab = tab.key
                 nav = false
               }}
-              class="flex w-full items-start gap-3 rounded-xl px-4 py-2.5 text-left transition-colors {appTab === tab.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-secondary/40 hover:text-foreground'}"
+              class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors {appTab === tab.key ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}"
             >
-              <svelte:component this={tab.icon} size={15} class="mt-0.5 shrink-0" />
-              <span>
-                <span class="block text-xs font-medium">{tab.label}</span>
-              </span>
+              <svelte:component this={tab.icon} size={16} class="shrink-0" />
+              <span class="text-xs">{tab.label}</span>
             </button>
           {/if}
         {/each}
-        <div class="mt-4 border-t border-border pt-4">
-          <button
-            type="button"
-            on:click={handleLogout}
-            class="flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-xs font-light text-rose-400 transition-colors hover:bg-rose-400/10"
-          >
-            Logout
-          </button>
-        </div>
       </nav>
+      <div class="p-3 border-t border-border shrink-0">
+        <button
+          type="button"
+          on:click={handleLogout}
+          class="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium text-rose-500 hover:bg-rose-500/10 transition-colors"
+        >
+          <LogOut size={16} />
+          <span>Sign Out</span>
+        </button>
+      </div>
     </aside>
 
-    <!-- Main Outer Container -->
-    <div class="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.06),_transparent_35%),linear-gradient(180deg,rgba(255,255,255,0.01),transparent_20%)]">
-      <div class="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 sm:py-8 lg:flex lg:gap-6 lg:px-8">
-        
-        <!-- Desktop Sidebar -->
-        <aside class="hidden w-64 shrink-0 lg:block">
-          <div class="sticky top-6 rounded-2xl border border-border bg-card/95 backdrop-blur overflow-hidden">
-            <div class="p-6 pb-4">
-              <div class="flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                  <span class="h-6 w-6 rounded bg-emerald-500 flex items-center justify-center text-white text-xs font-bold font-mono">aa</span>
-                  <span class="text-sm font-bold text-foreground">AcmaPanel</span>
-                </div>
-                <span class="rounded bg-emerald-500/10 text-emerald-500 px-2 py-0.5 text-[10px] font-semibold">0</span>
-              </div>
-            </div>
-            
-            <div class="px-4 pb-6 space-y-4">
-              <hr class="border-border mx-2" />
-              <nav class="space-y-0.5 max-h-[calc(100vh-220px)] overflow-y-auto">
-                {#each appTabsExtended as tab (tab.key)}
-                  {#if tab.disabled}
-                    <div class="flex items-center justify-between rounded-xl px-4 py-2 text-xs text-muted-foreground/40 cursor-not-allowed">
-                      <span class="flex items-center gap-3">
-                        <svelte:component this={tab.icon} size={15} />
-                        <span>{tab.label}</span>
-                      </span>
-                      <span class="text-[8px] bg-secondary px-1.5 py-0.2 rounded text-muted-foreground/30 font-mono">SOON</span>
-                    </div>
-                  {:else}
-                    <button
-                      type="button"
-                      on:click={() => appTab = tab.key}
-                      class="w-full rounded-xl px-4 py-2 text-left transition-colors {appTab === tab.key ? 'bg-primary text-primary-foreground shadow-sm font-medium' : 'text-muted-foreground hover:bg-secondary/40 hover:text-foreground'}"
-                    >
-                      <span class="flex items-center gap-3">
-                        <svelte:component this={tab.icon} size={15} class="shrink-0" />
-                        <span class="text-xs">{tab.label}</span>
-                      </span>
-                    </button>
-                  {/if}
-                {/each}
-              </nav>
-              <hr class="border-border mx-2" />
-              <button 
-                type="button"
-                class="w-full inline-flex h-9 items-center justify-center rounded-lg border border-border bg-transparent px-4 text-xs font-light hover:bg-secondary transition-colors" 
-                on:click={handleLogout}
-              >
-                Logout
-              </button>
-            </div>
-        </aside>
+    <!-- Desktop Sidebar -->
+    <aside class="hidden lg:flex flex-col h-screen bg-card border-r border-border transition-all duration-300 {sidebarCollapsed ? 'w-16' : 'w-64'} shrink-0 z-30 relative">
+      <!-- Brand Area -->
+      <div class="flex items-center border-b border-border px-4 h-16 shrink-0 {sidebarCollapsed ? 'justify-center' : 'justify-between'}">
+        {#if !sidebarCollapsed}
+          <div class="flex items-center gap-2.5" transition:fade={{ duration: 150 }}>
+            <span class="h-8 w-8 rounded bg-primary text-primary-foreground flex items-center justify-center font-bold font-mono text-sm shadow-sm shrink-0">ap</span>
+            <span class="text-sm font-semibold tracking-tight text-foreground truncate">AcmaPanel</span>
+          </div>
+        {:else}
+          <span class="h-8 w-8 rounded bg-primary text-primary-foreground flex items-center justify-center font-bold font-mono text-sm shadow-sm shrink-0">ap</span>
+        {/if}
+      </div>
 
-        <!-- Main Content Area -->
-        <main class="min-w-0 flex-1 space-y-8">
-          <header class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-4">
-            <!-- Left Side of Header -->
-            <div class="flex items-center gap-4">
-              <!-- Mobile menu button -->
+      <!-- Navigation Links -->
+      <nav class="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
+        {#each appTabsExtended as tab (tab.key)}
+          {#if tab.disabled}
+            {#if !sidebarCollapsed}
+              <div class="flex items-center justify-between rounded-lg px-3 py-2 text-xs text-muted-foreground/40 cursor-not-allowed select-none">
+                <span class="flex items-center gap-3">
+                  <svelte:component this={tab.icon} size={16} />
+                  <span>{tab.label}</span>
+                </span>
+                <span class="text-[8px] bg-secondary px-1.5 py-0.2 rounded text-muted-foreground/30 font-mono">SOON</span>
+              </div>
+            {/if}
+          {:else}
+            <div class="relative group">
               <button
                 type="button"
-                class="inline-flex h-9 w-9 items-center justify-center rounded-lg hover:bg-secondary lg:hidden"
-                on:click={() => nav = true}
+                on:click={() => appTab = tab.key}
+                class="flex w-full items-center rounded-lg px-3 py-2 text-left transition-colors {sidebarCollapsed ? 'justify-center' : 'gap-3'} {appTab === tab.key ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}"
               >
-                <Menu size={18} />
-              </button>
-              
-              <!-- User Profile & OS pill -->
-              <div class="flex items-center gap-3">
-                <div class="flex items-center gap-2">
-                  <div class="h-7 w-7 rounded-full bg-secondary flex items-center justify-center text-xs font-semibold text-foreground border border-border">
-                    U
-                  </div>
-                  <span class="text-xs font-semibold text-foreground">admin</span>
-                </div>
-                
-                <!-- Divider -->
-                <span class="text-muted-foreground/30 text-xs">|</span>
-                
-                <!-- OS Pill -->
-                <div class="flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 text-[11px] font-medium text-emerald-500">
-                  <span>{stats?.platform ?? "linux"}</span>
-                  <span class="opacity-55 mx-1">Up Time:</span>
-                  <span class="tabular-nums font-semibold">{stats ? formatUptime(stats.uptime) : "--"}</span>
-                </div>
-              </div>
-            </div>
-            
-            <!-- Right Side of Header -->
-            <div class="flex flex-wrap items-center gap-2 text-xs font-light text-muted-foreground">
-              <!-- PRO Badge -->
-              <span class="inline-flex items-center rounded-md bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
-                PRO
-              </span>
-              
-              <!-- Version -->
-              <span class="text-xs text-muted-foreground/80 font-mono pr-2">v{VERSION}</span>
-
-              <!-- Theme Dropdown & Dark/Light Toggle -->
-              <select 
-                bind:value={currentTheme}
-                class="rounded-lg border border-border bg-card px-2.5 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              >
-                <option value="aapanel">aaPanel Green</option>
-                <option value="slate">Slate Onyx</option>
-                <option value="violet">Aurora Violet</option>
-                <option value="forest">Nordic Forest</option>
-                <option value="abyss">Oceanic Abyss</option>
-                <option value="amber">Sunset Amber</option>
-              </select>
-
-              <button 
-                type="button"
-                on:click={() => isDark = !isDark}
-                class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-foreground hover:bg-secondary"
-                title="Toggle Light/Dark Mode"
-              >
-                {#if isDark}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
-                {:else}
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-moon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                <svelte:component this={tab.icon} size={16} class="shrink-0 {appTab === tab.key ? 'text-primary' : ''}" />
+                {#if !sidebarCollapsed}
+                  <span class="text-xs truncate">{tab.label}</span>
                 {/if}
               </button>
-
-              <!-- aaPanel Action Buttons -->
-              <button 
-                type="button" 
-                class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-xs text-rose-500 hover:bg-rose-500/10 transition-colors" 
-                on:click={() => {
-                  if (confirm("Are you sure you want to restart the dashboard backend process?")) {
-                    handleAction("vps-dashboard", "restart")
-                  }
-                }}
-              >
-                <Power size={12} />
-                <span>Restart</span>
-              </button>
-            </div>
-          </header>
-
-          <!-- Mobile Tabs Select -->
-          <div class="flex items-center rounded-lg border border-border bg-card p-0.5 lg:hidden overflow-x-auto">
-            {#each appTabsExtended as tab}
-              {#if !tab.disabled}
-                <button
-                  type="button"
-                  on:click={() => appTab = tab.key}
-                  class="flex-1 min-w-[70px] rounded-md py-1.5 text-center text-xs font-normal transition-all {appTab === tab.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground'}"
-                >
+              
+              <!-- Collapsed Sidebar Tooltip -->
+              {#if sidebarCollapsed}
+                <div class="absolute left-full top-1/2 -translate-y-1/2 ml-3 px-2.5 py-1.5 bg-popover text-popover-foreground border border-border text-[11px] font-medium rounded shadow-md pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
                   {tab.label}
-                </button>
+                </div>
               {/if}
-            {/each}
+            </div>
+          {/if}
+        {/each}
+      </nav>
+
+      <!-- Sidebar Collapse Toggler / Footer -->
+      <div class="p-3 border-t border-border shrink-0 flex {sidebarCollapsed ? 'justify-center' : 'justify-end'}">
+        <button
+          type="button"
+          on:click={toggleSidebar}
+          class="p-2 rounded-lg bg-secondary/60 hover:bg-secondary border border-border text-muted-foreground hover:text-foreground transition-all duration-200"
+          title={sidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+        >
+          {#if sidebarCollapsed}
+            <ChevronRight size={15} />
+          {:else}
+            <ChevronLeft size={15} />
+          {/if}
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content Container -->
+    <div class="flex flex-col flex-1 min-w-0 overflow-hidden">
+      <!-- Top Header -->
+      <header class="h-16 border-b border-border bg-card/95 backdrop-blur flex items-center justify-between px-6 z-20 shrink-0 select-none">
+        
+        <!-- Left Side: Mobile Menu Toggler + Breadcrumbs -->
+        <div class="flex items-center gap-4">
+          <button
+            type="button"
+            class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border hover:bg-secondary lg:hidden text-foreground transition-colors shrink-0"
+            on:click|stopPropagation={() => nav = true}
+          >
+            <Menu size={16} />
+          </button>
+          
+          <div class="flex items-center gap-2 text-xs font-light text-muted-foreground">
+            <span class="font-semibold text-foreground text-sm tracking-tight">{activeAppTab.label}</span>
+            <span class="opacity-30">/</span>
+            <span class="text-[11px] truncate max-w-[180px] hidden sm:inline">{activeAppTab.description}</span>
+          </div>
+        </div>
+        
+        <!-- Right Side: Action Badges & Popovers -->
+        <div class="flex items-center gap-3">
+          
+          <!-- Unified Server Status Pill -->
+          <div class="hidden md:flex items-center gap-3 bg-secondary/40 border border-border rounded-full px-3 py-1 text-[11px] font-medium text-muted-foreground">
+            <div class="flex items-center gap-1.5">
+              <span class="capitalize text-foreground font-semibold">{stats?.platform ?? "linux"}</span>
+            </div>
+            <span class="opacity-30">|</span>
+            <div class="flex items-center gap-1">
+              <span>Uptime:</span>
+              <span class="tabular-nums font-semibold text-foreground">{stats ? formatUptime(stats.uptime) : "--"}</span>
+            </div>
+            <span class="opacity-30">|</span>
+            <div class="flex items-center gap-1.5">
+              <span class="relative flex h-2 w-2">
+                {#if live}
+                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                {:else}
+                  <span class="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                {/if}
+              </span>
+              <span class="text-[10px] font-semibold uppercase {live ? 'text-emerald-500' : 'text-amber-500'}">
+                {live ? 'SSE Live' : 'Polling'}
+              </span>
+            </div>
           </div>
 
-          <!-- Active tab container -->
-          <div>
-            {#if appTab === "overview"}
-              <OverviewTab 
-                {stats} 
-                {history} 
-                {handleAction} 
-                domainsCount={domains.length}
-                containersCount={containers.length}
-                pm2Count={pm2.length}
-                processesCount={processes.length}
-                switchTab={(tabKey) => appTab = tabKey}
-              />
-            {:else}
-              {#if appTab === "processes"}
-                <ProcessesTab {processes} />
-              {:else if appTab === "docker"}
-                <DockerTab {containers} />
-              {:else if appTab === "nodes"}
-                <NodesTab {pm2} {handlePM2Action} {formatUptime} />
-              {:else if appTab === "domains"}
-                <DomainsTab
-                  {token}
-                  {domains}
-                  {setDomainDelete}
-                  {setDomainNote}
-                  onScan={handleScanDomains}
-                  scanning={domainScanning}
-                  onRefresh={poll}
-                />
-              {:else if appTab === "logs"}
-                <LogsTab
-                  {logTabs}
-                  {logTab}
-                  {setLogTab}
-                  {siteTab}
-                  {setSiteTab}
-                  {currentLog}
-                  {live}
-                  {autoScroll}
-                  {setAutoScroll}
-                  bind:logEndRef
-                />
-              {:else if appTab === "security"}
-                <SecurityTab {token} />
-              {:else if appTab === "files"}
-                <FilesTab {token} />
-              {:else if appTab === "databases"}
-                <DatabasesTab {token} />
-              {:else if appTab === "app-store"}
-                <AppStoreTab {token} />
-              {:else if appTab === "ftp"}
-                <FtpTab {token} />
-              {:else if appTab === "cron"}
-                <CronTab {token} />
-              {:else if appTab === "settings"}
-                <SettingsTab {token} />
+          <!-- SpotLight mock search input -->
+          <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/50 border border-border text-muted-foreground w-44 hover:w-56 transition-all duration-300 text-[11px] cursor-not-allowed select-none">
+            <Search size={13} class="shrink-0" />
+            <span class="flex-1">Search settings...</span>
+            <kbd class="pointer-events-none inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border bg-muted px-1 font-mono text-[9px] font-medium text-muted-foreground/75 opacity-100">
+              <span>⌘</span>K
+            </kbd>
+          </div>
+
+          <!-- Notifications Bell Dropdown -->
+          <div class="relative">
+            <button 
+              type="button"
+              on:click|stopPropagation={() => {
+                const prev = notificationsOpen;
+                closeAllMenus();
+                notificationsOpen = !prev;
+              }}
+              class="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-foreground hover:bg-secondary transition-colors animate-none"
+              title="Notifications"
+            >
+              <Bell size={15} />
+              {#if systemNotifications.length > 0}
+                <span class="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[8px] font-bold text-white ring-2 ring-card">
+                  {systemNotifications.length}
+                </span>
               {/if}
+            </button>
+            
+            {#if notificationsOpen}
+              <div class="absolute right-0 top-full mt-2 w-80 rounded-lg border border-border bg-card shadow-lg py-1 z-50" transition:fade={{ duration: 100 }}>
+                <div class="flex items-center justify-between px-3.5 py-2 border-b border-border">
+                  <span class="text-xs font-semibold text-foreground">System Warnings</span>
+                  {#if systemNotifications.length > 0}
+                    <span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                      {systemNotifications.length} Active
+                    </span>
+                  {/if}
+                </div>
+                <div class="max-h-64 overflow-y-auto divide-y divide-border">
+                  {#if systemNotifications.length === 0}
+                    <div class="flex flex-col items-center justify-center p-6 text-center">
+                      <Activity size={24} class="text-muted-foreground/30 mb-2 animate-pulse" />
+                      <p class="text-xs font-medium text-foreground">All systems normal</p>
+                      <p class="text-[10px] text-muted-foreground mt-0.5">Live monitoring is active.</p>
+                    </div>
+                  {:else}
+                    {#each systemNotifications as notif}
+                      <div class="p-3 text-xs flex gap-2.5 items-start hover:bg-secondary/30 transition-colors">
+                        <span class="mt-1 flex h-2 w-2 shrink-0 rounded-full {notif.type === 'error' ? 'bg-rose-500' : 'bg-amber-500'}"></span>
+                        <div class="space-y-0.5 flex-1 min-w-0">
+                          <p class="font-medium text-foreground truncate">{notif.title}</p>
+                          <p class="text-[11px] text-muted-foreground leading-normal">{notif.desc}</p>
+                          <p class="text-[9px] text-muted-foreground/60 mt-1">{notif.time}</p>
+                        </div>
+                      </div>
+                    {/each}
+                  {/if}
+                </div>
+              </div>
             {/if}
           </div>
-        </main>
-      </div>
+
+          <!-- Custom Theme Selector Popover -->
+          <div class="relative">
+            <button 
+              type="button"
+              on:click|stopPropagation={() => {
+                const prev = themeMenuOpen;
+                closeAllMenus();
+                themeMenuOpen = !prev;
+              }}
+              class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-foreground hover:bg-secondary transition-colors"
+              title="Change Theme & Appearance"
+            >
+              <Palette size={15} />
+            </button>
+            
+            {#if themeMenuOpen}
+              <div class="absolute right-0 top-full mt-2 w-52 rounded-lg border border-border bg-card shadow-lg py-1 z-50" transition:fade={{ duration: 100 }}>
+                <div class="px-3.5 py-2 border-b border-border text-xs font-semibold text-muted-foreground">Select Theme</div>
+                <div class="p-1.5 space-y-0.5">
+                  {#each themesList as t}
+                    <button
+                      type="button"
+                      on:click|stopPropagation={() => { currentTheme = t.key; themeMenuOpen = false; }}
+                      class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-secondary {currentTheme === t.key ? 'bg-primary/10 text-primary font-medium' : 'text-foreground'}"
+                    >
+                      <span class="h-3.5 w-3.5 rounded-full {t.color} border border-border/20 shrink-0"></span>
+                      <span class="flex-1">{t.label}</span>
+                      {#if currentTheme === t.key}
+                        <span class="h-1.5 w-1.5 rounded-full bg-primary shrink-0"></span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+                
+                <div class="border-t border-border p-1.5">
+                  <button
+                    type="button"
+                    on:click|stopPropagation={() => { isDark = !isDark; }}
+                    class="flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-secondary"
+                  >
+                    <span class="flex items-center gap-2">
+                      {#if isDark}
+                        <Moon size={13} class="text-muted-foreground" />
+                      {:else}
+                        <Sun size={13} class="text-muted-foreground" />
+                      {/if}
+                      <span>Dark Mode</span>
+                    </span>
+                    <div class="relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none {isDark ? 'bg-primary' : 'bg-muted'}">
+                      <span class="pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full bg-background shadow ring-0 transition duration-200 ease-in-out {isDark ? 'translate-x-3.5' : 'translate-x-0'}"></span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            {/if}
+          </div>
+
+          <!-- User Profile Dropdown -->
+          <div class="relative">
+            <button 
+              type="button"
+              on:click|stopPropagation={() => {
+                const prev = userMenuOpen;
+                closeAllMenus();
+                userMenuOpen = !prev;
+              }}
+              class="flex items-center gap-2 p-1.5 rounded-lg hover:bg-secondary transition-colors"
+              title="User Account"
+            >
+              <div class="h-7 w-7 rounded-full bg-primary/10 border border-primary/20 text-primary flex items-center justify-center text-xs font-bold shadow-sm shrink-0">
+                A
+              </div>
+              <ChevronDown size={12} class="text-muted-foreground shrink-0 transition-transform duration-200 {userMenuOpen ? 'rotate-180' : ''}" />
+            </button>
+            
+            {#if userMenuOpen}
+              <div class="absolute right-0 top-full mt-2 w-56 rounded-lg border border-border bg-card shadow-lg py-1 z-50" transition:fade={{ duration: 100 }}>
+                <div class="flex items-center gap-2.5 px-4 py-3 border-b border-border">
+                  <div class="h-9 w-9 rounded-full bg-primary/10 border border-primary/20 text-primary flex items-center justify-center font-bold text-sm shadow-sm shrink-0">
+                    A
+                  </div>
+                  <div class="min-w-0">
+                    <p class="text-xs font-semibold text-foreground truncate">admin</p>
+                    <p class="text-[10px] text-muted-foreground truncate">Administrator</p>
+                  </div>
+                </div>
+                
+                <div class="p-1">
+                  <!-- PRO Badge label inside dropdown -->
+                  <div class="flex items-center justify-between px-3 py-1.5 text-[10px] text-muted-foreground">
+                    <span>License Type</span>
+                    <span class="rounded bg-amber-500 px-1.5 py-0.2 text-[8px] font-bold text-white tracking-wider">PRO</span>
+                  </div>
+
+                  <hr class="border-border my-1" />
+
+                  <button
+                    type="button"
+                    on:click|stopPropagation={() => {
+                      userMenuOpen = false;
+                      if (confirm("Are you sure you want to restart the dashboard backend process?")) {
+                        handleAction("vps-dashboard", "restart");
+                      }
+                    }}
+                    class="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs text-rose-500 hover:bg-rose-500/10 transition-colors font-medium"
+                  >
+                    <Power size={13} />
+                    <span>Restart Panel</span>
+                  </button>
+                  
+                  <button
+                    type="button"
+                    on:click|stopPropagation={() => { userMenuOpen = false; handleLogout(); }}
+                    class="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                  >
+                    <LogOut size={13} />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              </div>
+            {/if}
+          </div>
+
+        </div>
+      </header>
+
+      <!-- Main Layout Content Section -->
+      <main class="flex-1 overflow-y-auto bg-secondary/15 p-6 space-y-6 relative">
+        <!-- Active tab container -->
+        <div>
+          {#if appTab === "overview"}
+            <OverviewTab 
+              {stats} 
+              {history} 
+              {handleAction} 
+              domainsCount={domains.length}
+              containersCount={containers.length}
+              pm2Count={pm2.length}
+              processesCount={processes.length}
+              switchTab={(tabKey) => appTab = tabKey}
+            />
+          {:else}
+            {#if appTab === "processes"}
+              <ProcessesTab {processes} />
+            {:else if appTab === "docker"}
+              <DockerTab {containers} />
+            {:else if appTab === "nodes"}
+              <NodesTab {pm2} {handlePM2Action} {formatUptime} />
+            {:else if appTab === "domains"}
+              <DomainsTab
+                {token}
+                {domains}
+                {setDomainDelete}
+                {setDomainNote}
+                onScan={handleScanDomains}
+                scanning={domainScanning}
+                onRefresh={poll}
+              />
+            {:else if appTab === "logs"}
+              <LogsTab
+                {logTabs}
+                {logTab}
+                {setLogTab}
+                {siteTab}
+                {setSiteTab}
+                {currentLog}
+                {live}
+                {autoScroll}
+                {setAutoScroll}
+                bind:logEndRef
+              />
+            {:else if appTab === "security"}
+              <SecurityTab {token} />
+            {:else if appTab === "files"}
+              <FilesTab {token} />
+            {:else if appTab === "databases"}
+              <DatabasesTab {token} />
+            {:else if appTab === "app-store"}
+              <AppStoreTab {token} />
+            {:else if appTab === "ftp"}
+              <FtpTab {token} />
+            {:else if appTab === "cron"}
+              <CronTab {token} />
+            {:else if appTab === "settings"}
+              <SettingsTab {token} />
+            {/if}
+          {/if}
+        </div>
+      </main>
     </div>
 
     <!-- Modals: Domain Delete Confirmation -->

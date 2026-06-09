@@ -27,7 +27,7 @@
     mode: string
   }
 
-  let currentPath = "/var/www" // default to www root for convenience
+  let currentPath = "/home" // default to home root for convenience
   let files: FileItem[] = []
   let loading = true
   let error = ""
@@ -285,7 +285,7 @@
 
   onMount(() => {
     // Attempt starting at web root, if fails falls back to root '/'
-    fetchFiles("/var/www").catch(() => fetchFiles("/"))
+    fetchFiles("/home").catch(() => fetchFiles("/"))
   })
 </script>
 
@@ -302,10 +302,10 @@
     <div class="flex items-center gap-2">
       <!-- Quick navigation buttons -->
       <button 
-        on:click={() => fetchFiles("/var/www")} 
+        on:click={() => fetchFiles("/home")} 
         class="rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
       >
-        /var/www
+        /home
       </button>
       <button 
         on:click={() => fetchFiles("/etc/nginx")} 

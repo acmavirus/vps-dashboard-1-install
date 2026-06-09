@@ -33,7 +33,7 @@
   let showAddModal = false
   let addUsername = ""
   let addPassword = ""
-  let addPath = "/var/www/"
+  let addPath = "/home/"
   let addLoading = false
   let addError = ""
 
@@ -111,7 +111,7 @@
         showAddModal = false
         addUsername = ""
         addPassword = ""
-        addPath = "/var/www/"
+        addPath = "/home/"
         successMsg = "FTP account created successfully!"
         await fetchFtpUsers()
       } else {
@@ -246,7 +246,7 @@
           addError = ""; 
           addUsername = ""; 
           addPassword = generateRandomPassword(); 
-          addPath = "/var/www/"; 
+          addPath = "/home/"; 
         }}
         class="inline-flex h-9 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-semibold text-primary-foreground shadow hover:opacity-90 transition-opacity"
       >
@@ -462,7 +462,7 @@
             <input 
               type="text" 
               bind:value={addPath}
-              placeholder="/var/www/my-domain.com"
+              placeholder="/home/my-domain.com"
               class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
               required
             />
