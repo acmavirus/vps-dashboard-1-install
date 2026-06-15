@@ -500,24 +500,28 @@ func getDBConfigPath() string {
 
 func loadDBConfig() (DBConfig, error) {
 	var config DBConfig
-	path := getDBConfigPath()
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	val := getSetting("db_config", "")
+	if val == "" {
+		path := "db_config.json"
+		if _, err := os.Stat(path); err == nil {
+			data, err := os.ReadFile(path)
+			if err == nil {
+				_ = json.Unmarshal(data, &config)
+				_ = saveDBConfig(config)
+			}
+		}
 		return config, nil
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return config, err
-	}
-	err = json.Unmarshal(data, &config)
+	err := json.Unmarshal([]byte(val), &config)
 	return config, err
 }
 
 func saveDBConfig(config DBConfig) error {
-	data, err := json.MarshalIndent(config, "", "  ")
+	data, err := json.Marshal(config)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(getDBConfigPath(), data, 0600)
+	return saveSetting("db_config", string(data))
 }
 
 func getDBConnection(dbName string) (*sql.DB, error) {

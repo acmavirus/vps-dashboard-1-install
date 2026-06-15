@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	stdnet "net"
 	"os"
@@ -126,7 +125,7 @@ func registerAppsRoutes(api *gin.RouterGroup) {
 			}
 		}
 
-		metaList, _ := loadAppsMetadata()
+		metaList, _ := loadAppsMetadataSQL()
 		var finalApps []StoreApp
 		installedIDs := make(map[string]bool)
 
@@ -253,7 +252,7 @@ func registerAppsRoutes(api *gin.RouterGroup) {
 			}
 		}
 
-		metaList, _ := loadAppsMetadata()
+		metaList, _ := loadAppsMetadataSQL()
 		for _, m := range metaList {
 			if m.ID == containerID {
 				c.JSON(400, gin.H{"error": "An instance with this domain or name already exists."})
@@ -523,7 +522,6 @@ func registerAppsRoutes(api *gin.RouterGroup) {
 			return
 		}
 
-		updated := false
 		newMeta := AppMetadata{
 			ID:     containerID,
 			AppID:  req.ID,
@@ -533,17 +531,7 @@ func registerAppsRoutes(api *gin.RouterGroup) {
 			DBUser: wpDBUser,
 			DBPass: wpDBPass,
 		}
-		for i, m := range metaList {
-			if m.ID == containerID {
-				metaList[i] = newMeta
-				updated = true
-				break
-			}
-		}
-		if !updated {
-			metaList = append(metaList, newMeta)
-		}
-		_ = saveAppsMetadata(metaList)
+		_ = saveAppMetadataSQL(newMeta)
 
 		if req.Domain != "" {
 			err = createNginxProxy(req.Domain, port)
@@ -590,8 +578,7 @@ func registerAppsRoutes(api *gin.RouterGroup) {
 
 		_ = exec.Command("docker", "volume", "rm", req.ID+"_data").Run()
 
-		metaList, _ := loadAppsMetadata()
-		var remainingMeta []AppMetadata
+		metaList, _ := loadAppsMetadataSQL()
 		for _, m := range metaList {
 			if m.ID == req.ID {
 				if m.Domain != "" {
@@ -602,43 +589,12 @@ func registerAppsRoutes(api *gin.RouterGroup) {
 					_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", m.DBName))
 					_, _ = runSQLCommand("FLUSH PRIVILEGES;")
 				}
-			} else {
-				remainingMeta = append(remainingMeta, m)
 			}
 		}
-		_ = saveAppsMetadata(remainingMeta)
+		_ = deleteAppMetadataSQL(req.ID)
 
 		c.JSON(200, gin.H{"status": "ok"})
 	})
-}
-
-func getAppsMetadataPath() string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(".", "data", "apps-metadata.json")
-	}
-	return filepath.Join("/usr/local/bin", "data", "apps-metadata.json")
-}
-
-func loadAppsMetadata() ([]AppMetadata, error) {
-	var list []AppMetadata
-	path := getAppsMetadataPath()
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return list, nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	err = json.Unmarshal(data, &list)
-	return list, err
-}
-
-func saveAppsMetadata(list []AppMetadata) error {
-	data, err := json.MarshalIndent(list, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(getAppsMetadataPath(), data, 0600)
 }
 
 func createNginxProxy(domain string, port string) error {

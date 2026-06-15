@@ -14,7 +14,12 @@
     Save, 
     FolderPlus, 
     FilePlus, 
-    ArrowRight 
+    ArrowRight,
+    FolderArchive,
+    FileArchive,
+    Shield,
+    User,
+    Download
   } from "lucide-svelte"
   import { toast } from "../../lib/toast"
 
@@ -54,6 +59,35 @@
   let renameNewName = ""
   let renameError = ""
   let renameLoading = false
+
+  // Chmod modal state
+  let showChmodModal = false
+  let chmodPath = ""
+  let chmodMode = "0755"
+  let chmodLoading = false
+  let chmodError = ""
+
+  // Chown modal state
+  let showChownModal = false
+  let chownPath = ""
+  let chownUser = "www-data"
+  let chownGroup = "www-data"
+  let chownLoading = false
+  let chownError = ""
+
+  // Zip modal state
+  let showZipModal = false
+  let zipSourcePath = ""
+  let zipDestPath = ""
+  let zipLoading = false
+  let zipError = ""
+
+  // Unzip modal state
+  let showUnzipModal = false
+  let unzipSourcePath = ""
+  let unzipDestPath = ""
+  let unzipLoading = false
+  let unzipError = ""
 
   // Path input jump state
   let pathInput = ""
@@ -267,6 +301,153 @@
     }
   }
 
+  function openChmodModal(file: FileItem) {
+    chmodPath = currentPath === "/" ? "/" + file.name : currentPath + "/" + file.name
+    chmodMode = file.is_dir ? "0755" : "0644"
+    chmodError = ""
+    showChmodModal = true
+  }
+
+  async function handleChmod(e: Event) {
+    e.preventDefault()
+    chmodLoading = true
+    chmodError = ""
+    try {
+      const response = await fetch("/api/files/chmod", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token || "",
+        },
+        body: JSON.stringify({ path: chmodPath, mode: chmodMode }),
+      })
+      if (response.ok) {
+        showChmodModal = false
+        toast.success("Permissions updated", `Chmod ${chmodMode} applied to ${chmodPath}`)
+        fetchFiles()
+      } else {
+        const errData = await response.json().catch(() => ({}))
+        chmodError = errData.error || "Failed to change permissions"
+      }
+    } catch {
+      chmodError = "Connection error"
+    } finally {
+      chmodLoading = false
+    }
+  }
+
+  function openChownModal(file: FileItem) {
+    chownPath = currentPath === "/" ? "/" + file.name : currentPath + "/" + file.name
+    chownUser = "www-data"
+    chownGroup = "www-data"
+    chownError = ""
+    showChownModal = true
+  }
+
+  async function handleChown(e: Event) {
+    e.preventDefault()
+    chownLoading = true
+    chownError = ""
+    try {
+      const response = await fetch("/api/files/chown", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token || "",
+        },
+        body: JSON.stringify({ path: chownPath, user: chownUser, group: chownGroup }),
+      })
+      if (response.ok) {
+        showChownModal = false
+        toast.success("Owner updated", `Chown to ${chownUser}:${chownGroup} applied to ${chownPath}`)
+        fetchFiles()
+      } else {
+        const errData = await response.json().catch(() => ({}))
+        chownError = errData.error || "Failed to change owner"
+      }
+    } catch {
+      chownError = "Connection error"
+    } finally {
+      chownLoading = false
+    }
+  }
+
+  function openZipModal(file: FileItem) {
+    zipSourcePath = currentPath === "/" ? "/" + file.name : currentPath + "/" + file.name
+    zipDestPath = (currentPath === "/" ? "/" : currentPath + "/") + file.name + ".zip"
+    zipError = ""
+    showZipModal = true
+  }
+
+  async function handleZip(e: Event) {
+    e.preventDefault()
+    zipLoading = true
+    zipError = ""
+    try {
+      const response = await fetch("/api/files/zip", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token || "",
+        },
+        body: JSON.stringify({ path: zipSourcePath, zip_path: zipDestPath }),
+      })
+      if (response.ok) {
+        showZipModal = false
+        toast.success("Archive created", `Compressed successfully to ${zipDestPath}`)
+        fetchFiles()
+      } else {
+        const errData = await response.json().catch(() => ({}))
+        zipError = errData.error || "Failed to compress path"
+      }
+    } catch {
+      zipError = "Connection error"
+    } finally {
+      zipLoading = false
+    }
+  }
+
+  function openUnzipModal(file: FileItem) {
+    unzipSourcePath = currentPath === "/" ? "/" + file.name : currentPath + "/" + file.name
+    unzipDestPath = currentPath
+    unzipError = ""
+    showUnzipModal = true
+  }
+
+  async function handleUnzip(e: Event) {
+    e.preventDefault()
+    unzipLoading = true
+    unzipError = ""
+    try {
+      const response = await fetch("/api/files/unzip", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token || "",
+        },
+        body: JSON.stringify({ path: unzipSourcePath, dest_path: unzipDestPath }),
+      })
+      if (response.ok) {
+        showUnzipModal = false
+        toast.success("Archive extracted", `Unzipped successfully to ${unzipDestPath}`)
+        fetchFiles()
+      } else {
+        const errData = await response.json().catch(() => ({}))
+        unzipError = errData.error || "Failed to extract archive"
+      }
+    } catch {
+      unzipError = "Connection error"
+    } finally {
+      unzipLoading = false
+    }
+  }
+
+  function handleDownloadFolder(file: FileItem) {
+    const folderPath = currentPath === "/" ? "/" + file.name : currentPath + "/" + file.name
+    toast.success("Preparing download", "Compressing folder for download...")
+    window.open(`/api/files/download-folder?path=${encodeURIComponent(folderPath)}&token=${encodeURIComponent(token || "")}`, "_blank")
+  }
+
   function formatBytes(bytes: number) {
     if (bytes === 0) return "-"
     const k = 1024
@@ -296,9 +477,9 @@
     <div>
       <h2 class="text-lg font-bold text-foreground flex items-center gap-2">
         <Folder size={18} class="text-primary" />
-        Web File Manager
+        Web File Manager Pro
       </h2>
-      <p class="text-xs text-muted-foreground mt-0.5">Browse directory tree, edit system configuration files directly.</p>
+      <p class="text-xs text-muted-foreground mt-0.5">Browse directory tree, edit config files, change file permissions, and compress folders.</p>
     </div>
     <div class="flex items-center gap-2">
       <!-- Quick navigation buttons -->
@@ -403,12 +584,12 @@
               <th class="px-6 py-3 w-32">Size</th>
               <th class="px-6 py-3 w-40">Modified</th>
               <th class="px-6 py-3 w-28">Permissions</th>
-              <th class="px-6 py-3 w-24 text-right">Operations</th>
+              <th class="px-6 py-3 w-44 text-right">Operations</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border">
             {#each files as file (file.name)}
-              <tr class="hover:bg-secondary/10 transition-colors">
+              <tr class="hover:bg-secondary/10 transition-colors text-xs">
                 <td class="px-6 py-3.5">
                   <div class="flex items-center gap-3">
                     {#if file.is_dir}
@@ -441,7 +622,34 @@
                 </td>
                 <td class="px-6 py-3.5 text-right">
                   <div class="flex items-center justify-end gap-1">
-                    {#if !file.is_dir}
+                    {#if file.is_dir}
+                      <!-- Zip Directory -->
+                      <button 
+                        on:click={() => openZipModal(file)}
+                        class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-amber-500 transition-all"
+                        title="Zip Folder"
+                      >
+                        <FolderArchive size={13} />
+                      </button>
+                      <!-- Download Zip Folder -->
+                      <button 
+                        on:click={() => handleDownloadFolder(file)}
+                        class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-emerald-500 transition-all"
+                        title="Download Zip"
+                      >
+                        <Download size={13} />
+                      </button>
+                    {:else if file.name.endsWith('.zip')}
+                      <!-- Unzip archive -->
+                      <button 
+                        on:click={() => openUnzipModal(file)}
+                        class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-amber-500 transition-all"
+                        title="Unzip Archive"
+                      >
+                        <FileArchive size={13} />
+                      </button>
+                    {:else}
+                      <!-- Edit standard File -->
                       <button 
                         on:click={() => handleFileClick(file)}
                         class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-primary transition-all"
@@ -450,6 +658,26 @@
                         <Edit2 size={13} />
                       </button>
                     {/if}
+
+                    <!-- Chmod -->
+                    <button 
+                      on:click={() => openChmodModal(file)}
+                      class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-blue-500 transition-all"
+                      title="Chmod (Permissions)"
+                    >
+                      <Shield size={13} />
+                    </button>
+
+                    <!-- Chown -->
+                    <button 
+                      on:click={() => openChownModal(file)}
+                      class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-violet-500 transition-all"
+                      title="Chown (Owner)"
+                    >
+                      <User size={13} />
+                    </button>
+
+                    <!-- Rename -->
                     <button 
                       on:click={() => openRenameModal(file)}
                       class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-primary transition-all"
@@ -457,6 +685,8 @@
                     >
                       <ChevronRight size={13} class="rotate-45" />
                     </button>
+
+                    <!-- Delete -->
                     <button 
                       on:click={() => handleDeleteItem(file)}
                       class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-rose-500 transition-all"
@@ -639,6 +869,240 @@
               class="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow hover:opacity-90 disabled:opacity-50"
             >
               {renameLoading ? "Renaming..." : "Rename"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Chmod (Permissions) Modal -->
+  {#if showChmodModal}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div class="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl overflow-hidden">
+        <div class="flex items-center justify-between border-b border-border px-6 py-4">
+          <h3 class="text-sm font-bold text-foreground">Change File Permissions (Chmod)</h3>
+          <button on:click={() => showChmodModal = false} class="text-muted-foreground hover:text-foreground">
+            <X size={16} />
+          </button>
+        </div>
+
+        <form on:submit={handleChmod} class="space-y-4 p-6">
+          {#if chmodError}
+            <div class="rounded-lg bg-rose-500/10 p-3 text-xs text-rose-500 border border-rose-500/20">
+              {chmodError}
+            </div>
+          {/if}
+
+          <div class="space-y-1">
+            <span class="text-xs font-semibold text-muted-foreground block">Target Path</span>
+            <span class="text-xs text-foreground font-mono block break-all">{chmodPath}</span>
+          </div>
+
+          <div class="space-y-2">
+            <!-- svelte-ignore a11y-label-has-associated-control -->
+            <label class="text-xs font-semibold text-muted-foreground">Permission Mode (Octal)</label>
+            <input 
+              type="text" 
+              bind:value={chmodMode}
+              placeholder="e.g. 0755 or 0644"
+              class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+              required
+            />
+            <span class="text-[10px] text-muted-foreground">Common values: 0755 (Directories), 0644 (Files), 0777 (Public writeable)</span>
+          </div>
+
+          <div class="flex items-center justify-end gap-3 pt-4 border-t border-border">
+            <button 
+              type="button" 
+              on:click={() => showChmodModal = false}
+              class="rounded-lg border border-border px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit" 
+              disabled={chmodLoading}
+              class="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow hover:opacity-90 disabled:opacity-50"
+            >
+              {chmodLoading ? "Applying..." : "Apply"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Chown (Owner) Modal -->
+  {#if showChownModal}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div class="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl overflow-hidden">
+        <div class="flex items-center justify-between border-b border-border px-6 py-4">
+          <h3 class="text-sm font-bold text-foreground">Change File Owner (Chown)</h3>
+          <button on:click={() => showChownModal = false} class="text-muted-foreground hover:text-foreground">
+            <X size={16} />
+          </button>
+        </div>
+
+        <form on:submit={handleChown} class="space-y-4 p-6">
+          {#if chownError}
+            <div class="rounded-lg bg-rose-500/10 p-3 text-xs text-rose-500 border border-rose-500/20">
+              {chownError}
+            </div>
+          {/if}
+
+          <div class="space-y-1">
+            <span class="text-xs font-semibold text-muted-foreground block">Target Path</span>
+            <span class="text-xs text-foreground font-mono block break-all">{chownPath}</span>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <!-- svelte-ignore a11y-label-has-associated-control -->
+              <label class="text-xs font-semibold text-muted-foreground">User Owner</label>
+              <input 
+                type="text" 
+                bind:value={chownUser}
+                class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                required
+              />
+            </div>
+            <div class="space-y-2">
+              <!-- svelte-ignore a11y-label-has-associated-control -->
+              <label class="text-xs font-semibold text-muted-foreground">Group Owner</label>
+              <input 
+                type="text" 
+                bind:value={chownGroup}
+                class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                required
+              />
+            </div>
+          </div>
+
+          <div class="flex items-center justify-end gap-3 pt-4 border-t border-border">
+            <button 
+              type="button" 
+              on:click={() => showChownModal = false}
+              class="rounded-lg border border-border px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit" 
+              disabled={chownLoading}
+              class="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow hover:opacity-90 disabled:opacity-50"
+            >
+              {chownLoading ? "Applying..." : "Apply"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Zip Modal -->
+  {#if showZipModal}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div class="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl overflow-hidden">
+        <div class="flex items-center justify-between border-b border-border px-6 py-4">
+          <h3 class="text-sm font-bold text-foreground">Compress Folder (Zip)</h3>
+          <button on:click={() => showZipModal = false} class="text-muted-foreground hover:text-foreground">
+            <X size={16} />
+          </button>
+        </div>
+
+        <form on:submit={handleZip} class="space-y-4 p-6">
+          {#if zipError}
+            <div class="rounded-lg bg-rose-500/10 p-3 text-xs text-rose-500 border border-rose-500/20">
+              {zipError}
+            </div>
+          {/if}
+
+          <div class="space-y-1">
+            <span class="text-xs font-semibold text-muted-foreground block">Source Folder</span>
+            <span class="text-xs text-foreground font-mono block break-all">{zipSourcePath}</span>
+          </div>
+
+          <div class="space-y-2">
+            <!-- svelte-ignore a11y-label-has-associated-control -->
+            <label class="text-xs font-semibold text-muted-foreground">Archive Destination Path</label>
+            <input 
+              type="text" 
+              bind:value={zipDestPath}
+              class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+              required
+            />
+          </div>
+
+          <div class="flex items-center justify-end gap-3 pt-4 border-t border-border">
+            <button 
+              type="button" 
+              on:click={() => showZipModal = false}
+              class="rounded-lg border border-border px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit" 
+              disabled={zipLoading}
+              class="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow hover:opacity-90 disabled:opacity-50"
+            >
+              {zipLoading ? "Compressing..." : "Compress"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Unzip Modal -->
+  {#if showUnzipModal}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div class="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl overflow-hidden">
+        <div class="flex items-center justify-between border-b border-border px-6 py-4">
+          <h3 class="text-sm font-bold text-foreground">Extract Archive (Unzip)</h3>
+          <button on:click={() => showUnzipModal = false} class="text-muted-foreground hover:text-foreground">
+            <X size={16} />
+          </button>
+        </div>
+
+        <form on:submit={handleUnzip} class="space-y-4 p-6">
+          {#if unzipError}
+            <div class="rounded-lg bg-rose-500/10 p-3 text-xs text-rose-500 border border-rose-500/20">
+              {unzipError}
+            </div>
+          {/if}
+
+          <div class="space-y-1">
+            <span class="text-xs font-semibold text-muted-foreground block">Archive File</span>
+            <span class="text-xs text-foreground font-mono block break-all">{unzipSourcePath}</span>
+          </div>
+
+          <div class="space-y-2">
+            <!-- svelte-ignore a11y-label-has-associated-control -->
+            <label class="text-xs font-semibold text-muted-foreground">Extraction Directory Path</label>
+            <input 
+              type="text" 
+              bind:value={unzipDestPath}
+              class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+              required
+            />
+          </div>
+
+          <div class="flex items-center justify-end gap-3 pt-4 border-t border-border">
+            <button 
+              type="button" 
+              on:click={() => showUnzipModal = false}
+              class="rounded-lg border border-border px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              type="submit" 
+              disabled={unzipLoading}
+              class="rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow hover:opacity-90 disabled:opacity-50"
+            >
+              {unzipLoading ? "Extracting..." : "Extract"}
             </button>
           </div>
         </form>

@@ -20,7 +20,7 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 )
 
-var Version = "v3.0.0"
+var Version = "v4.0.0"
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS
@@ -138,11 +138,17 @@ func autoHealNginxLogs() {
 func main() {
 	_ = godotenv.Load(".env")
 
+	// Initialize SQLite Database
+	initDB()
+
 	// Scan and auto-heal missing Nginx logs
 	autoHealNginxLogs()
 
 	// Start Intrusion Prevention System (IPS) background routine
 	go startIntrusionPreventionSystem()
+
+	// Start background worker to record historical metrics (every 5 minutes)
+	go startHistoricalMetricsCollector()
 
 	// Cache CPU hardware specs at startup
 	if info, err := cpu.Info(); err == nil && len(info) > 0 {
@@ -172,6 +178,13 @@ func main() {
 	if p := os.Getenv("ADMIN_PASS"); p != "" {
 		adminPass = p
 	}
+	
+	adminUser = getSetting("admin_user", adminUser)
+	adminPass = getSetting("admin_pass", adminPass)
+	
+	_ = saveSetting("admin_user", adminUser)
+	_ = saveSetting("admin_pass", adminPass)
+
 	if t := os.Getenv("AUTH_TOKEN"); t != "" {
 		authToken = t
 	}
@@ -191,6 +204,10 @@ func main() {
 		registerFilesRoutes(api)
 		registerAppsRoutes(api)
 		registerCronRoutes(api)
+		registerTerminalRoutes(api)
+		registerPHPRoutes(api)
+		registerBackupRoutes(api)
+		registerProtectedAuthRoutes(api)
 	}
 
 	// Static Files Fallback

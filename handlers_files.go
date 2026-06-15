@@ -1,10 +1,16 @@
 package main
 
 import (
+	"archive/zip"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -197,4 +203,248 @@ func registerFilesRoutes(api *gin.RouterGroup) {
 
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// --- File Manager Pro Upgrades (v4.0) ---
+
+	api.POST("/files/chmod", func(c *gin.Context) {
+		var req struct {
+			Path string `json:"path"`
+			Mode string `json:"mode"` // e.g. "0755" or "0644"
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid request"})
+			return
+		}
+		path := filepath.Clean(req.Path)
+		var mode uint32
+		_, err := fmt.Sscanf(req.Mode, "%o", &mode)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "Invalid mode format"})
+			return
+		}
+		err = os.Chmod(path, os.FileMode(mode))
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	api.POST("/files/chown", func(c *gin.Context) {
+		var req struct {
+			Path  string `json:"path"`
+			User  string `json:"user"`
+			Group string `json:"group"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid request"})
+			return
+		}
+		path := filepath.Clean(req.Path)
+		if runtime.GOOS == "windows" {
+			c.JSON(200, gin.H{"status": "ok", "message": "Chown is not supported on Windows (Simulated success)"})
+			return
+		}
+		cmd := exec.Command("chown", "-R", req.User+":"+req.Group, path)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error(), "details": string(output)})
+			return
+		}
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	api.POST("/files/zip", func(c *gin.Context) {
+		var req struct {
+			Path    string `json:"path"`
+			ZipPath string `json:"zip_path"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid request"})
+			return
+		}
+		path := filepath.Clean(req.Path)
+		zipPath := filepath.Clean(req.ZipPath)
+
+		err := zipDirectory(path, zipPath)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	api.POST("/files/unzip", func(c *gin.Context) {
+		var req struct {
+			Path     string `json:"path"`
+			DestPath string `json:"dest_path"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid request"})
+			return
+		}
+		path := filepath.Clean(req.Path)
+		destPath := filepath.Clean(req.DestPath)
+
+		err := unzipExtract(path, destPath)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	api.GET("/files/download-folder", func(c *gin.Context) {
+		path := c.Query("path")
+		if path == "" {
+			c.JSON(400, gin.H{"error": "Path is required"})
+			return
+		}
+		path = filepath.Clean(path)
+		info, err := os.Stat(path)
+		if err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+		if !info.IsDir() {
+			c.JSON(400, gin.H{"error": "Path is not a directory"})
+			return
+		}
+
+		tmpZip := filepath.Join(os.TempDir(), fmt.Sprintf("folder_download_%d.zip", time.Now().UnixNano()))
+		err = zipDirectory(path, tmpZip)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to zip directory: " + err.Error()})
+			return
+		}
+
+		c.File(tmpZip)
+		go func() {
+			time.Sleep(10 * time.Second)
+			_ = os.Remove(tmpZip)
+		}()
+	})
+}
+
+func zipDirectory(source, target string) error {
+	zipFile, err := os.Create(target)
+	if err != nil {
+		return err
+	}
+	defer zipFile.Close()
+
+	archive := zip.NewWriter(zipFile)
+	defer archive.Close()
+
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+
+	var baseDir string
+	if info.IsDir() {
+		baseDir = filepath.Base(source)
+	}
+
+	err = filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+
+		if baseDir != "" {
+			relPath, err := filepath.Rel(source, path)
+			if err != nil {
+				return err
+			}
+			if relPath == "." {
+				return nil
+			}
+			header.Name = filepath.ToSlash(filepath.Join(baseDir, relPath))
+		} else {
+			header.Name = filepath.Base(path)
+		}
+
+		if info.IsDir() {
+			header.Name += "/"
+		} else {
+			header.Method = zip.Deflate
+		}
+
+		writer, err := archive.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		_, err = io.Copy(writer, file)
+		return err
+	})
+
+	return err
+}
+
+func unzipExtract(source, target string) error {
+	reader, err := zip.OpenReader(source)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	err = os.MkdirAll(target, 0755)
+	if err != nil {
+		return err
+	}
+
+	for _, file := range reader.File {
+		path := filepath.Join(target, file.Name)
+		
+		cleanTarget := filepath.Clean(target)
+		cleanPath := filepath.Clean(path)
+		if !strings.HasPrefix(cleanPath, cleanTarget) {
+			return fmt.Errorf("illegal file path in zip: %s", file.Name)
+		}
+
+		if file.FileInfo().IsDir() {
+			_ = os.MkdirAll(path, 0755)
+			continue
+		}
+
+		err := os.MkdirAll(filepath.Dir(path), 0755)
+		if err != nil {
+			return err
+		}
+
+		fileReader, err := file.Open()
+		if err != nil {
+			return err
+		}
+
+		targetFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+		if err != nil {
+			fileReader.Close()
+			return err
+		}
+
+		_, err = io.Copy(targetFile, fileReader)
+		targetFile.Close()
+		fileReader.Close()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

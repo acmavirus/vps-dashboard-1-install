@@ -36,7 +36,8 @@
     ChevronLeft,
     Sun,
     Moon,
-    Palette
+    Palette,
+    Cloud
   } from "lucide-svelte"
 
   import OverviewTab from "./components/dashboard/OverviewTab.svelte"
@@ -54,6 +55,9 @@
   import CronTab from "./components/dashboard/CronTab.svelte"
   import SettingsTab from "./components/dashboard/SettingsTab.svelte"
   import SSLTab from "./components/dashboard/SSLTab.svelte"
+  import PHPManagerTab from "./components/dashboard/PHPManagerTab.svelte"
+  import TerminalTab from "./components/dashboard/TerminalTab.svelte"
+  import BackupTab from "./components/dashboard/BackupTab.svelte"
   import Toast from "./components/Toast.svelte"
 
   import { toast } from "./lib/toast"
@@ -155,6 +159,8 @@
   let password = ""
   let error = ""
   let loading = false
+  let require2FA = false
+  let login2FACode = ""
 
   let es: EventSource | null = null
   let logEndRef: HTMLDivElement | null = null
@@ -198,11 +204,45 @@
       const data = await response.json()
 
       if (response.ok) {
-        localStorage.setItem("auth_token", data.token)
-        token = data.token
-        initDashboard()
+        if (data.status === "require_2fa") {
+          require2FA = true
+          error = ""
+        } else {
+          localStorage.setItem("auth_token", data.token)
+          token = data.token
+          initDashboard()
+        }
       } else {
         error = data.error || "Login failed"
+      }
+    } catch {
+      error = "Server error"
+    } finally {
+      loading = false
+    }
+  }
+
+  async function handleVerify2FALogin(event: Event) {
+    event.preventDefault()
+    loading = true
+    error = ""
+
+    try {
+      const response = await fetch("/api/login/verify-2fa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password, code: login2FACode }),
+      })
+      const data = await response.json()
+
+      if (response.ok) {
+        localStorage.setItem("auth_token", data.token)
+        token = data.token
+        require2FA = false
+        login2FACode = ""
+        initDashboard()
+      } else {
+        error = data.error || "Verification failed"
       }
     } catch {
       error = "Server error"
@@ -536,6 +576,9 @@
   const appTabsExtended = [
     { key: "overview", label: "Home", icon: LayoutDashboard, disabled: false, description: "Sys status & system parameters" },
     { key: "domains", label: "Website", icon: Globe, disabled: false, description: "Sites, notes and domain actions" },
+    { key: "php-manager", label: "PHP Manager", icon: Wrench, disabled: false, description: "PHP configuration & extensions" },
+    { key: "terminal", label: "Terminal", icon: Terminal, disabled: false, description: "Secure Web SSH Terminal console" },
+    { key: "backup", label: "Backup", icon: Cloud, disabled: false, description: "Manage database & folder backups" },
     { key: "ftp", label: "FTP", icon: Key, disabled: false, description: "FTP accounts & parameters" },
     { key: "databases", label: "Databases", icon: Database, disabled: false, description: "SQL database management" },
     { key: "docker", label: "Docker", icon: Box, disabled: false, description: "Containers and runtime status" },
@@ -605,40 +648,78 @@
         </p>
       </div>
       <div class="px-6 pb-6">
-        <form on:submit={handleLogin} class="space-y-4">
-          <div class="space-y-2">
-            <!-- svelte-ignore a11y-label-has-associated-control -->
-            <label class="text-xs font-light text-muted-foreground">Username</label>
-            <input
-              type="text"
-              bind:value={username}
-              class="w-full rounded-lg border border-border bg-secondary/50 px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-              placeholder="admin"
-              required
-            />
-          </div>
-          <div class="space-y-2">
-            <!-- svelte-ignore a11y-label-has-associated-control -->
-            <label class="text-xs font-light text-muted-foreground">Password</label>
-            <input
-              type="password"
-              bind:value={password}
-              class="w-full rounded-lg border border-border bg-secondary/50 px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-              placeholder="••••••••"
-              required
-            />
-          </div>
-          {#if error}
-            <p class="text-center text-xs text-rose-400">{error}</p>
-          {/if}
-          <button
-            type="submit"
-            disabled={loading}
-            class="w-full rounded-lg bg-blue-600 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
-          >
-            {loading ? "Logging in..." : "Sign In"}
-          </button>
-        </form>
+        {#if require2FA}
+          <form on:submit={handleVerify2FALogin} class="space-y-4" transition:fade={{ duration: 150 }}>
+            <div class="space-y-2">
+              <!-- svelte-ignore a11y-label-has-associated-control -->
+              <label class="text-xs font-light text-muted-foreground block text-center">Two-Factor Authentication (2FA)</label>
+              <input
+                type="text"
+                bind:value={login2FACode}
+                maxlength="6"
+                class="w-full rounded-lg border border-border bg-secondary/50 px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 text-center font-mono tracking-widest text-lg font-bold"
+                placeholder="000000"
+                required
+                autofocus
+              />
+              <p class="text-[10px] text-muted-foreground text-center">Enter the 6-digit verification code from your authenticator app.</p>
+            </div>
+            {#if error}
+              <p class="text-center text-xs text-rose-400">{error}</p>
+            {/if}
+            <div class="flex gap-3">
+              <button
+                type="button"
+                on:click={() => { require2FA = false; login2FACode = ""; error = ""; }}
+                class="flex-1 rounded-lg border border-border py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                class="flex-1 rounded-lg bg-blue-600 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading ? "Verifying..." : "Verify Code"}
+              </button>
+            </div>
+          </form>
+        {:else}
+          <form on:submit={handleLogin} class="space-y-4">
+            <div class="space-y-2">
+              <!-- svelte-ignore a11y-label-has-associated-control -->
+              <label class="text-xs font-light text-muted-foreground">Username</label>
+              <input
+                type="text"
+                bind:value={username}
+                class="w-full rounded-lg border border-border bg-secondary/50 px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="admin"
+                required
+              />
+            </div>
+            <div class="space-y-2">
+              <!-- svelte-ignore a11y-label-has-associated-control -->
+              <label class="text-xs font-light text-muted-foreground">Password</label>
+              <input
+                type="password"
+                bind:value={password}
+                class="w-full rounded-lg border border-border bg-secondary/50 px-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+            {#if error}
+              <p class="text-center text-xs text-rose-400">{error}</p>
+            {/if}
+            <button
+              type="submit"
+              disabled={loading}
+              class="w-full rounded-lg bg-blue-600 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+            >
+              {loading ? "Logging in..." : "Sign In"}
+            </button>
+          </form>
+        {/if}
       </div>
     </div>
   </div>
@@ -1074,6 +1155,12 @@
               />
             {:else if appTab === "security"}
               <SecurityTab {token} />
+            {:else if appTab === "php-manager"}
+              <PHPManagerTab {token} />
+            {:else if appTab === "terminal"}
+              <TerminalTab {token} />
+            {:else if appTab === "backup"}
+              <BackupTab {token} />
             {:else if appTab === "files"}
               <FilesTab {token} />
             {:else if appTab === "databases"}

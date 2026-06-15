@@ -57,8 +57,7 @@ func registerDockerRoutes(api *gin.RouterGroup) {
 
 		if req.Action == "remove" {
 			_ = exec.Command("docker", "volume", "rm", req.ID+"_data").Run()
-			metaList, _ := loadAppsMetadata()
-			var remainingMeta []AppMetadata
+			metaList, _ := loadAppsMetadataSQL()
 			for _, m := range metaList {
 				if m.ID == req.ID {
 					if m.Domain != "" {
@@ -69,11 +68,9 @@ func registerDockerRoutes(api *gin.RouterGroup) {
 						_, _ = runSQLCommand(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", m.DBName))
 						_, _ = runSQLCommand("FLUSH PRIVILEGES;")
 					}
-				} else {
-					remainingMeta = append(remainingMeta, m)
 				}
 			}
-			_ = saveAppsMetadata(remainingMeta)
+			_ = deleteAppMetadataSQL(req.ID)
 		}
 
 		c.JSON(200, gin.H{"status": "ok"})

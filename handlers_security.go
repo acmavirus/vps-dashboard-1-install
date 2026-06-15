@@ -45,7 +45,7 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 	})
 
 	api.POST("/security/clear-logs", func(c *gin.Context) {
-		if err := saveSecurityLogs([]SecurityLogEntry{}); err != nil {
+		if err := clearSecurityLogsSQL(); err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
@@ -73,6 +73,14 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 		}
 
 		if runtime.GOOS == "windows" {
+			_ = logSecurityEventSQL(SecurityLogEntry{
+				IP:        ip,
+				Timestamp: time.Now(),
+				URI:       "Manual Ban",
+				Domain:    "-",
+				UserAgent: "-",
+				Action:    "Simulation Banned Manually",
+			})
 			c.JSON(200, gin.H{"status": "ok", "message": "Simulation: Banned IP " + ip})
 			return
 		}
@@ -84,9 +92,7 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 			return
 		}
 
-		// Add to logs
-		logs := loadSecurityLogs()
-		logs = append(logs, SecurityLogEntry{
+		_ = logSecurityEventSQL(SecurityLogEntry{
 			IP:        ip,
 			Timestamp: time.Now(),
 			URI:       "Manual Ban",
@@ -94,7 +100,6 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 			UserAgent: "-",
 			Action:    "Banned Manually",
 		})
-		_ = saveSecurityLogs(logs)
 
 		c.JSON(200, gin.H{"status": "ok", "message": string(output)})
 	})
@@ -115,6 +120,14 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 		}
 
 		if runtime.GOOS == "windows" {
+			_ = logSecurityEventSQL(SecurityLogEntry{
+				IP:        ip,
+				Timestamp: time.Now(),
+				URI:       "Manual Unban",
+				Domain:    "-",
+				UserAgent: "-",
+				Action:    "Simulation Unbanned Manually",
+			})
 			c.JSON(200, gin.H{"status": "ok", "message": "Simulation: Unbanned IP " + ip})
 			return
 		}
@@ -126,9 +139,7 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 			return
 		}
 
-		// Add to logs
-		logs := loadSecurityLogs()
-		logs = append(logs, SecurityLogEntry{
+		_ = logSecurityEventSQL(SecurityLogEntry{
 			IP:        ip,
 			Timestamp: time.Now(),
 			URI:       "Manual Unban",
@@ -136,7 +147,6 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 			UserAgent: "-",
 			Action:    "Unbanned Manually",
 		})
-		_ = saveSecurityLogs(logs)
 
 		c.JSON(200, gin.H{"status": "ok", "message": string(output)})
 	})
@@ -382,22 +392,7 @@ func getFirewallStatus() FirewallStatus {
 	}
 }
 
-func getSecuritySettingsPath() string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(".", "data", "security-settings.json")
-	}
-	return filepath.Join("/usr/local/bin", "data", "security-settings.json")
-}
-
-func getSecurityLogsPath() string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(".", "data", "security-logs.json")
-	}
-	return filepath.Join("/usr/local/bin", "data", "security-logs.json")
-}
-
 func loadSecuritySettings() SecuritySettings {
-	path := getSecuritySettingsPath()
 	defaultSettings := SecuritySettings{
 		AutoBanEnabled: true,
 		BanThreshold:   1,
@@ -405,54 +400,37 @@ func loadSecuritySettings() SecuritySettings {
 		TelegramAlerts: true,
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
+	val := getSetting("security_settings", "")
+	if val == "" {
 		return defaultSettings
 	}
 
 	var settings SecuritySettings
-	if err := json.Unmarshal(data, &settings); err != nil {
+	if err := json.Unmarshal([]byte(val), &settings); err != nil {
 		return defaultSettings
 	}
 	return settings
 }
 
 func saveSecuritySettings(settings SecuritySettings) error {
-	path := getSecuritySettingsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(settings, "", "  ")
+	data, err := json.Marshal(settings)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return saveSetting("security_settings", string(data))
 }
 
 func loadSecurityLogs() []SecurityLogEntry {
-	path := getSecurityLogsPath()
-	var logs []SecurityLogEntry
-	data, err := os.ReadFile(path)
+	logs, err := loadSecurityLogsSQL()
 	if err != nil {
-		return logs
+		return []SecurityLogEntry{}
 	}
-	_ = json.Unmarshal(data, &logs)
 	return logs
 }
 
 func saveSecurityLogs(logs []SecurityLogEntry) error {
-	path := getSecurityLogsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	if len(logs) > 500 {
-		logs = logs[len(logs)-500:]
-	}
-	data, err := json.MarshalIndent(logs, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
+	// Dummy handler to satisfy any residual code
+	return nil
 }
 
 func getBannedIPs() map[string]bool {
@@ -556,14 +534,7 @@ func runIPSScan(offsets map[string]int64) {
 		}
 	}
 
-	if len(logFiles) == 0 {
-		return
-	}
-
 	bannedIPs := getBannedIPs()
-	var newLogs []SecurityLogEntry
-	logsModified := false
-	existingLogs := loadSecurityLogs()
 
 	for _, logPath := range logFiles {
 		fileInfo, err := os.Stat(logPath)
@@ -660,8 +631,7 @@ func runIPSScan(offsets map[string]int64) {
 						UserAgent: ua,
 						Action:    actionResult,
 					}
-					newLogs = append(newLogs, entry)
-					logsModified = true
+					_ = logSecurityEventSQL(entry)
 
 					if settings.TelegramAlerts {
 						msg := fmt.Sprintf("🛡️ [Security Auto-Ban] VPS: %s\nIP: %s\nAction: %s\nProbed: %s\nDomain: %s\nUser Agent: %s",
@@ -673,11 +643,6 @@ func runIPSScan(offsets map[string]int64) {
 		}
 		file.Close()
 		offsets[logPath] = size
-	}
-
-	if logsModified {
-		allLogs := append(existingLogs, newLogs...)
-		_ = saveSecurityLogs(allLogs)
 	}
 }
 

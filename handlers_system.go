@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,6 +151,9 @@ func registerSystemRoutes(api *gin.RouterGroup) {
 			adminPass = req.Password
 		}
 
+		_ = saveSetting("admin_user", adminUser)
+		_ = saveSetting("admin_pass", adminPass)
+
 		if err := saveSettingsToEnv(adminUser, adminPass); err != nil {
 			c.JSON(500, gin.H{"error": "Failed to save settings: " + err.Error()})
 			return
@@ -173,6 +177,21 @@ func registerSystemRoutes(api *gin.RouterGroup) {
 			lastSoftwareCheck = time.Now()
 		}
 		c.JSON(200, cachedSoftware)
+	})
+
+	api.GET("/metrics/history", func(c *gin.Context) {
+		limitStr := c.DefaultQuery("limit", "288")
+		var limit int
+		_, _ = fmt.Sscanf(limitStr, "%d", &limit)
+		if limit <= 0 {
+			limit = 288
+		}
+		history, err := getMetricsHistorySQL(limit)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, history)
 	})
 }
 
@@ -532,4 +551,22 @@ func parseVersionString(raw string) string {
 		return firstLine[:60] + "..."
 	}
 	return firstLine
+}
+
+func startHistoricalMetricsCollector() {
+	log.Println("📊 Starting Historical Metrics Collector worker...")
+	
+	// Record initially
+	stats := getStats()
+	_ = logSystemMetricsSQL(stats)
+	_ = cleanOldMetricsSQL()
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		stats := getStats()
+		_ = logSystemMetricsSQL(stats)
+		_ = cleanOldMetricsSQL()
+	}
 }

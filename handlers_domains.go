@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net/http"
@@ -474,105 +473,20 @@ func clearDomainCache() {
 	lastDomainCheck = time.Time{}
 }
 
-func getDomainNotesPath() string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(".", "data", "domain-notes.json")
-	}
-	return filepath.Join("/usr/local/bin", "data", "domain-notes.json")
-}
-
-func loadDomainNotes() map[string]string {
-	path := getDomainNotesPath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]string{}
-	}
-
-	notes := map[string]string{}
-	if err := json.Unmarshal(data, &notes); err != nil {
-		return map[string]string{}
-	}
-	return notes
-}
-
-func saveDomainNotes(notes map[string]string) error {
-	path := getDomainNotesPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-
-	data, err := json.MarshalIndent(notes, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
-}
-
 func updateDomainNote(domain string, note string) error {
-	notes := loadDomainNotes()
-	note = strings.TrimSpace(note)
-	if note == "" {
-		delete(notes, domain)
-	} else {
-		notes[domain] = note
+	err := updateDomainNoteSQL(domain, note)
+	if err == nil {
+		clearDomainCache()
 	}
-
-	if err := saveDomainNotes(notes); err != nil {
-		return err
-	}
-
-	clearDomainCache()
-	return nil
-}
-
-func getDomainStarsPath() string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(".", "data", "domain-stars.json")
-	}
-	return filepath.Join("/usr/local/bin", "data", "domain-stars.json")
-}
-
-func loadDomainStars() map[string]bool {
-	path := getDomainStarsPath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]bool{}
-	}
-
-	stars := map[string]bool{}
-	if err := json.Unmarshal(data, &stars); err != nil {
-		return map[string]bool{}
-	}
-	return stars
-}
-
-func saveDomainStars(stars map[string]bool) error {
-	path := getDomainStarsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-
-	data, err := json.MarshalIndent(stars, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
+	return err
 }
 
 func updateDomainStar(domain string, starred bool) error {
-	stars := loadDomainStars()
-	if !starred {
-		delete(stars, domain)
-	} else {
-		stars[domain] = true
+	err := updateDomainStarSQL(domain, starred)
+	if err == nil {
+		clearDomainCache()
 	}
-
-	if err := saveDomainStars(stars); err != nil {
-		return err
-	}
-
-	clearDomainCache()
-	return nil
+	return err
 }
 
 func getDomainConfigCandidates(domain string) []string {
@@ -765,7 +679,7 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 		DeleteRoot: deleteRoot,
 	}
 
-	metaList, _ := loadAppsMetadata()
+	metaList, _ := loadAppsMetadataSQL()
 	var dockerApp *AppMetadata
 	for _, m := range metaList {
 		if m.Domain == domain {
@@ -818,14 +732,8 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 			}
 		}
 
-		_ = updateDomainNote(domain, "")
-		var remainingMeta []AppMetadata
-		for _, item := range metaList {
-			if item.Domain != domain {
-				remainingMeta = append(remainingMeta, item)
-			}
-		}
-		_ = saveAppsMetadata(remainingMeta)
+		_ = deleteDomainSQL(domain)
+		_ = deleteAppMetadataSQL(dockerApp.ID)
 
 		if runtime.GOOS != "windows" {
 			_ = reloadNginx()
@@ -855,8 +763,7 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 	}
 
 	if deleteDB {
-		notes := loadDomainNotes()
-		note := notes[domain]
+		note := getDomainNoteSQL(domain)
 		var noteDBName, noteDBUser string
 		for _, l := range strings.Split(note, "\n") {
 			l = strings.TrimSpace(l)
@@ -917,7 +824,7 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 		}
 	}
 
-	if err := updateDomainNote(domain, ""); err != nil {
+	if err := deleteDomainSQL(domain); err != nil {
 		return result, err
 	}
 
@@ -933,14 +840,11 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 }
 
 func getDomains(scan bool) []DomainInfo {
-	notes := loadDomainNotes()
-	stars := loadDomainStars()
-
 	if !scan && cachedDomains != nil && time.Since(lastDomainCheck) < 30*time.Second {
 		// Populate dynamic status for cached domains
 		for i, d := range cachedDomains {
-			cachedDomains[i].Note = notes[d.Domain]
-			cachedDomains[i].IsStarred = stars[d.Domain]
+			cachedDomains[i].Note = getDomainNoteSQL(d.Domain)
+			cachedDomains[i].IsStarred = getDomainStarredSQL(d.Domain)
 		}
 		return cachedDomains
 	}
@@ -997,8 +901,8 @@ func getDomains(scan bool) []DomainInfo {
 			Domain:    domain,
 			Status:    status,
 			Code:      code,
-			Note:      notes[domain],
-			IsStarred: stars[domain],
+			Note:      getDomainNoteSQL(domain),
+			IsStarred: getDomainStarredSQL(domain),
 		})
 	}
 
