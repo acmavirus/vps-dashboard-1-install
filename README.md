@@ -1,56 +1,60 @@
-# 🚀 AcmaDash - Premium VPS Management System
+# 🚀 AcmaDash - Premium VPS Management System (v3.0.0)
 
-**AcmaDash** is a lightweight, high-performance, and secure VPS management dashboard. The system is designed with a **Go (Gin)** backend that directly embeds a **React (Vite + TypeScript + TailwindCSS + Shadcn/UI)** frontend into a single executable binary.
+**AcmaDash** is a lightweight, high-performance, and secure VPS management dashboard. The system is designed with a modular **Go (Gin)** backend that directly embeds a **Svelte 4 (Vite 5 + TypeScript + TailwindCSS)** frontend into a single executable binary.
 
 ---
 
 ## ✨ Key Features
 
-### 1. 📊 Real-Time System Monitoring
-- Updates hardware metrics continuously using **SSE (Server-Sent Events)**: CPU, RAM, Disk, Network I/O, and active TCP connections.
-- Displays system Uptime, Hostname, OS, Platform, and Kernel version.
+### 1. 📊 Real-Time System Monitoring (Optimized SSE)
+- Updates hardware metrics continuously using an optimized **SSE (Server-Sent Events)** loop (2s interval, lightweight stats-only payload to minimize disk I/O).
+- Displays system Uptime, Hostname, OS, Platform, Kernel version, CPU, RAM, Disk, and Network I/O.
 - **Telegram Alert Integration**: Automatically sends alert notifications to a designated Telegram chat when CPU usage exceeds 90% or TCP connections exceed 2000 (indicating a potential DDoS attack).
 
 ### 2. 📝 Unified Log Viewer
 - Views system logs (`/var/log/syslog`) in real time.
-- Automatically scans and displays HTTP access (`access.log`) and error (`error.log`) logs for each Nginx site configured in `/etc/nginx/sites-enabled`.
+- Automatically scans and displays HTTP access and error logs for each Nginx virtual host.
 
-### 3. ⚙️ Process Manager
-- Lists the top 10 running processes consuming the most system resources (CPU/RAM).
+### 3. ⚙️ Process Manager (Top 15 & Control)
+- Lists the top 15 running processes consuming the most system resources (CPU/RAM).
+- Supports terminating (killing) processes directly from the UI (with safe exclusions for critical system services).
 
-### 4. 🐳 Docker Container Management
+### 4. 🐳 Docker Container Management (Full Control)
 - Lists active Docker containers showing their real-time resource utilization (CPU, RAM, Image, and Status).
-- Includes a simulation mode for developers running on Windows.
+- Allows starting, stopping, restarting, and removing containers directly from the UI.
+- Automatically handles database, volume, and Nginx proxy cleanup when uninstalling managed apps.
 
 ### 5. 🟢 PM2 Process Manager
 - Lists Node.js applications managed by PM2.
-- Supports remote control actions (Start, Stop, Restart, Delete) directly from the dashboard.
+- Supports PM2 status monitoring directly from the dashboard.
 
-### 6. 🌐 Domain & Webspace Management
+### 6. 🌐 Domain & Webspace Management (SSL Integrated)
 - Scans and checks the HTTP status of virtual hosts configured under Nginx sites.
-- Allows managing quick annotations/notes for each domain.
-- **Safe Domain Deletion**:
-  - Gathers database and source path details.
-  - Automatically drops associated MySQL databases by parsing Laravel `.env` files.
-  - Deletes site configuration files and related Nginx logs.
-  - Deletes the source directories safely (strictly limited to designated paths: `/var/www`, `/home`, `/srv/www`, `/opt`).
-  - Reloads Nginx automatically (`nginx -s reload`).
+- Allows managing quick annotations/notes and starring domains.
+- **SSL Manager**: Scans Let's Encrypt certificates, shows days remaining, and supports one-click renewal (`certbot renew`) from the UI.
+- **Safe Domain Deletion**: Drops associated MySQL databases by parsing Laravel `.env` files, deletes Nginx configs, site directories, and reloads Nginx.
+
+### 7. 🗄️ Database Explorer & SQL Runner (New)
+- Explores MySQL/MariaDB database list and table schemas (Engine, collation, rows count, data size).
+- Inspects table column definitions (types, primary keys, defaults).
+- **SQL Editor**: Executes raw custom SQL queries (SELECT, INSERT, UPDATE, DELETE) directly from the browser with dynamic results table.
 
 ---
 
 ## 🛠️ Tech Stack
 
 ### Backend
-- **Language**: Go (Golang)
-- **Web Framework**: [Gin Gonic](https://github.com/gin-gonic/gin)
-- **System Metrics**: [gopsutil](https://github.com/shirou/gopsutil)
+- **Language**: Go 1.24
+- **Web Framework**: Gin Gonic v1.10
+- **System Metrics**: gopsutil v4
+- **Architecture**: Modular layout (split handlers, types, helpers)
+- **Caching Layer**: In-memory cache with custom TTLs (Software: 60s, Domains: 30s, Processes: 5s)
 - **Asset Embedding**: Native Go `embed` package
-- **OS Support**: Linux (production environment) and Windows (simulation/development).
 
 ### Frontend
-- **Framework**: React 18 + Vite + TypeScript
-- **CSS / UI**: Tailwind CSS + Shadcn/UI + Lucide Icons
-- **Charts**: Recharts
+- **Framework**: Svelte 4 + Vite 5 + TypeScript
+- **CSS / UI**: Tailwind CSS 3 + Lucide Icons
+- **Branding**: AcmaDash v3.0
 
 ---
 
@@ -58,16 +62,20 @@
 
 ```text
 ├── .agent/               # Agent Workspace (Instructions, Persona, Memory, Workflows)
-├── frontend/             # React Frontend source code (Vite, TS, Tailwind CSS)
-│   ├── src/              # React components & UI logic
+├── frontend/             # Svelte Frontend source code
+│   ├── src/              # Svelte components & UI logic
 │   ├── dist/             # Built assets (embedded into the Go binary)
 │   └── package.json
 ├── scripts/
+│   ├── deploy-vps.ps1    # Automated deployment script for Windows to Linux VPS
 │   └── install.sh        # Shell script for automated installation/updates
 ├── .env.example          # Environment template file
 ├── go.mod                # Go module dependencies
 ├── go.sum
-├── main.go               # Backend entry point
+├── main.go               # Backend entry point (bootstrapper & routing)
+├── types.go              # Shared structure definitions
+├── helpers.go             # Global helper and utility functions
+├── handlers_*.go         # Modular domain handlers (auth, system, docker, domains, database, files, apps, cron, security)
 ├── Makefile              # Automation tool for building and cleaning the project
 └── README.md
 ```
@@ -84,19 +92,12 @@ Run the following command to download the latest release binary, configure the s
 curl -sSL https://raw.githubusercontent.com/acmavirus/vps-dashboard-1-install/main/scripts/install.sh | sudo bash
 ```
 
-*What the installer script does:*
-1. Identifies the system architecture (amd64 / arm64).
-2. Downloads the latest release package directly from GitHub.
-3. Installs the binary to `/usr/local/bin/vps-dash`.
-4. Configures and registers a systemd service: `vps-dashboard.service`.
-5. Starts the dashboard on port `8900`.
-
 ---
 
 ### Method 2: Building from Source
 
 #### Prerequisites:
-- **Go**: Version 1.21 or higher
+- **Go**: Version 1.24 or higher
 - **Node.js & npm**: Required to build frontend assets
 
 #### Steps:
@@ -107,11 +108,13 @@ curl -sSL https://raw.githubusercontent.com/acmavirus/vps-dashboard-1-install/ma
    cd vps-dashboard-1-install
    ```
 
-2. **Build the project using Makefile**:
+2. **Build the project**:
    ```bash
-   make build
+   # Build frontend static files first
+   cd frontend && npm install && npm run build && cd ..
+   # Build Go binary
+   go build -o vps-dash .
    ```
-   *Note: This command installs frontend dependencies, builds static files, runs `go mod tidy`, and compiles the Go backend binary.*
 
 3. **Run the dashboard**:
    ```bash
@@ -142,16 +145,6 @@ AUTH_TOKEN=acmadash_secret_token_2024
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
 ```
-
-> [!WARNING]
-> If `ADMIN_USER`, `ADMIN_PASS`, and `AUTH_TOKEN` are not defined in the `.env` file, the dashboard falls back to the default credentials shown above. Please change them before deploying to a production server.
-
----
-
-## 🔒 Security & Scope Restrictions
-
-1. **Token Authentication**: All API endpoints require authorization using the token passed via the `Authorization` header or `token` query parameter (for SSE streams).
-2. **Action Safety Bounds**: Administrative actions (such as service restarts) are restricted to standard system services (`nginx`, `php`, `mysql`). Folder and database deletion targets are sanitized and constrained to safe paths to prevent accidental or malicious data loss.
 
 ---
 

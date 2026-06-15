@@ -15,6 +15,7 @@
     Eye
   } from "lucide-svelte"
   import DatabaseExplorer from "./DatabaseExplorer.svelte"
+  import { toast } from "../../lib/toast"
 
   export let token: string | null = null
 
@@ -218,13 +219,13 @@
       })
       if (response.ok) {
         const data = await response.json()
-        alert(`Backup completed successfully! Saved to: ${data.file}\n\nYou can access it in the 'Files' tab inside '/var/www/backups/'`)
+        toast.success("Backup complete", `Database "${name}" saved to: ${data.file}. Access it in the Files tab.`)
       } else {
         const errData = await response.json().catch(() => ({}))
-        alert(errData.error || "Backup failed")
+        toast.error("Backup failed", errData.error || "Could not create database backup.")
       }
     } catch {
-      alert("Network error during backup")
+      toast.error("Network error", "Could not reach the server.")
     } finally {
       backupLoading = false
       backupDbName = ""

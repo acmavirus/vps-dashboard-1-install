@@ -12,6 +12,7 @@
     FileText,
     Key,
     ShieldAlert,
+    Shield,
     ShoppingBag,
     Settings,
     LogOut,
@@ -52,6 +53,10 @@
   import FtpTab from "./components/dashboard/FtpTab.svelte"
   import CronTab from "./components/dashboard/CronTab.svelte"
   import SettingsTab from "./components/dashboard/SettingsTab.svelte"
+  import SSLTab from "./components/dashboard/SSLTab.svelte"
+  import Toast from "./components/Toast.svelte"
+
+  import { toast } from "./lib/toast"
 
   import type {
     AllLogs,
@@ -316,8 +321,6 @@
   })
 
   async function handleAction(service: string, action: string) {
-    if (!confirm(`Are you sure you want to ${action} ${service}?`)) return
-
     try {
       const response = await fetch("/api/control", {
         method: "POST",
@@ -329,20 +332,18 @@
       })
 
       if (response.ok) {
-        alert("Done!")
+        toast.success(`${action.charAt(0).toUpperCase() + action.slice(1)} successful`, `Service ${service} has been ${action}ed.`)
       } else if (response.status === 401) {
         handleLogout()
       } else {
-        alert("Failed")
+        toast.error("Action failed", `Failed to ${action} ${service}.`)
       }
     } catch {
-      alert("Error")
+      toast.error("Connection error", "Could not reach the server.")
     }
   }
 
   async function handlePM2Action(name: string, action: string) {
-    if (!confirm(`Are you sure you want to ${action} ${name}?`)) return
-
     try {
       const response = await fetch("/api/pm2/control", {
         method: "POST",
@@ -354,14 +355,14 @@
       })
 
       if (response.ok) {
-        alert("Done!")
+        toast.success(`PM2 ${action} successful`, `App "${name}" has been ${action}ed.`)
       } else if (response.status === 401) {
         handleLogout()
       } else {
-        alert("Failed")
+        toast.error("PM2 action failed", `Failed to ${action} app "${name}".`)
       }
     } catch {
-      alert("Error")
+      toast.error("Connection error", "Could not reach the server.")
     }
   }
 
@@ -390,14 +391,14 @@
         domains = domains.filter((item) => item.domain !== domainDelete!.domain)
         const deletedDomainName = domainDelete.domain
         domainDelete = null
-        alert(data.message || `Deleted ${deletedDomainName}`)
+        toast.success("Domain deleted", data.message || `"${deletedDomainName}" has been removed successfully.`)
       } else if (response.status === 401) {
         handleLogout()
       } else {
-        alert(data.error || "Delete failed")
+        toast.error("Delete failed", data.error || "Could not delete domain.")
       }
     } catch {
-      alert("Error")
+      toast.error("Connection error", "Could not reach the server.")
     } finally {
       domainDeleteLoading = false
     }
@@ -432,14 +433,14 @@
             : item
         )
         domainNote = null
-        alert("Note saved")
+        toast.success("Note saved", `Note for "${savedDomainName}" has been updated.`)
       } else if (response.status === 401) {
         handleLogout()
       } else {
-        alert(data.error || "Save note failed")
+        toast.error("Save failed", data.error || "Could not save the note.")
       }
     } catch {
-      alert("Error")
+      toast.error("Connection error", "Could not reach the server.")
     } finally {
       domainNoteLoading = false
     }
@@ -459,6 +460,7 @@
       }
     } catch (error) {
       console.error("Scan error:", error)
+      toast.error("Scan failed", "Could not scan domains.")
     } finally {
       domainScanning = false
     }
@@ -510,7 +512,7 @@
           return a.domain.localeCompare(b.domain)
         })
         const data = await response.json().catch(() => ({}))
-        alert(data.error || "Failed to toggle star highlight")
+        toast.error("Star failed", data.error || "Failed to toggle star highlight")
       }
     } catch (err) {
       // Revert on network error
@@ -526,7 +528,7 @@
         if (!aStarred && bStarred) return 1
         return a.domain.localeCompare(b.domain)
       })
-      alert("Network connection error")
+      toast.error("Network error", "Connection lost. Please try again.")
     }
   }
 
@@ -540,6 +542,7 @@
     { key: "processes", label: "Monitor", icon: Cpu, disabled: false, description: "Top running processes" },
     { key: "nodes", label: "Nodes (PM2)", icon: Terminal, disabled: false, description: "PM2 applications and actions" },
     { key: "security", label: "Security", icon: ShieldAlert, disabled: false, description: "Firewall & intrusion protection" },
+    { key: "ssl", label: "SSL Manager", icon: Shield, disabled: false, description: "Manage SSL certificates" },
     { key: "files", label: "Files", icon: HardDrive, disabled: false, description: "Web-based file explorer" },
     { key: "logs", label: "Logs", icon: FileText, disabled: false, description: "System and nginx logs" },
     { key: "cron", label: "Cron", icon: Clock, disabled: false, description: "Scheduled task execution" },
@@ -982,9 +985,7 @@
                     type="button"
                     on:click|stopPropagation={() => {
                       userMenuOpen = false;
-                      if (confirm("Are you sure you want to restart the dashboard backend process?")) {
-                        handleAction("vps-dashboard", "restart");
-                      }
+                      handleAction("vps-dashboard", "restart");
                     }}
                     class="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-xs text-rose-500 hover:bg-rose-500/10 transition-colors font-medium"
                   >
@@ -1022,12 +1023,15 @@
               pm2Count={pm2.length}
               processesCount={processes.length}
               switchTab={(tabKey) => appTab = tabKey}
+              {token}
             />
           {:else}
             {#if appTab === "processes"}
-              <ProcessesTab {processes} />
+              <ProcessesTab {processes} {token} onRefresh={poll} />
             {:else if appTab === "docker"}
-              <DockerTab {containers} />
+              <DockerTab {containers} {token} onRefresh={poll} />
+            {:else if appTab === "ssl"}
+              <SSLTab {token} />
             {:else if appTab === "nodes"}
               <NodesTab {pm2} {handlePM2Action} {formatUptime} />
             {:else if appTab === "domains"}
@@ -1214,3 +1218,6 @@
     {/if}
   </div>
 {/if}
+
+<!-- Global Toast Notifications -->
+<Toast />

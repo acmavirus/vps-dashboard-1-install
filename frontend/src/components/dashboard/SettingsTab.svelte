@@ -12,6 +12,7 @@
     Info,
     Shield
   } from "lucide-svelte"
+  import { toast } from "../../lib/toast"
 
   export let token: string | null = null
 

@@ -1,0 +1,4 @@
+﻿35.199.85.199 - - [12/Jun/2026:03:34:12 +0000] "GET /packages/api/.env HTTP/1.1" 404 2616 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_1) AppleWebKit/537.36"
+35.199.85.199 - - [12/Jun/2026:03:34:12 +0000] "GET /backend/.env.staging HTTP/1.1" 404 2616 "-" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+35.199.85.199 - - [12/Jun/2026:03:34:13 +0000] "GET /app/.env.production HTTP/1.1" 404 2616 "-" "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36"
+192.168.1.1 - - [12/Jun/2026:03:34:13 +0000] "GET /.env HTTP/1.1" 200 500 "-" "curl/7.68.0"

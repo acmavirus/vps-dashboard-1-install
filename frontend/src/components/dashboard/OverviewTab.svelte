@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte"
   import { 
     Cpu, 
     MemoryStick, 
@@ -23,6 +24,39 @@
   export let pm2Count = 0
   export let processesCount = 0
   export let switchTab: (tab: string) => void
+  export let token: string | null = null
+
+  interface SoftwareInfo {
+    nginx: string
+    php83: string
+    php74: string
+    mysql: string
+    redis: string
+  }
+
+  let software: SoftwareInfo | null = null
+  let softwareLoading = false
+
+  async function fetchSoftware() {
+    if (!token) return
+    softwareLoading = true
+    try {
+      const response = await fetch("/api/software", {
+        headers: { Authorization: token }
+      })
+      if (response.ok) {
+        software = await response.json()
+      }
+    } catch (err) {
+      console.error("Error fetching software info:", err)
+    } finally {
+      softwareLoading = false
+    }
+  }
+
+  onMount(() => {
+    fetchSoftware()
+  })
 
   // Network and Disk speed states
   let lastSent = 0
@@ -399,21 +433,25 @@
           <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
             <div class="flex items-center gap-3">
               <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-500 text-sm font-bold">N</span>
-              <div>
-                <p class="text-xs font-semibold text-foreground">Nginx 1.22.1</p>
+              <div class="max-w-[150px] truncate">
+                <p class="text-xs font-semibold text-foreground truncate" title={software ? software.nginx : "Loading..."}>
+                  {software ? software.nginx : "Loading..."}
+                </p>
                 <p class="text-[10px] text-muted-foreground">Web Server</p>
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-              <div class="flex gap-1">
-                <button on:click={() => handleAction("nginx", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
-                  <RotateCcw size={12} />
-                </button>
-                <button on:click={() => handleAction("nginx", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
-                  <Square size={12} />
-                </button>
-              </div>
+              <span class="h-2.5 w-2.5 rounded-full {software && software.nginx !== 'Not Installed' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-500'}" />
+              {#if software && software.nginx !== 'Not Installed'}
+                <div class="flex gap-1">
+                  <button on:click={() => handleAction("nginx", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
+                    <RotateCcw size={12} />
+                  </button>
+                  <button on:click={() => handleAction("nginx", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
+                    <Square size={12} />
+                  </button>
+                </div>
+              {/if}
             </div>
           </div>
 
@@ -421,21 +459,25 @@
           <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
             <div class="flex items-center gap-3">
               <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400 text-sm font-bold">PHP</span>
-              <div>
-                <p class="text-xs font-semibold text-foreground">PHP 8.3</p>
+              <div class="max-w-[150px] truncate">
+                <p class="text-xs font-semibold text-foreground truncate" title={software ? software.php83 : "Loading..."}>
+                  {software ? software.php83 : "Loading..."}
+                </p>
                 <p class="text-[10px] text-muted-foreground">FPM Service</p>
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-              <div class="flex gap-1">
-                <button on:click={() => handleAction("php8.3", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
-                  <RotateCcw size={12} />
-                </button>
-                <button on:click={() => handleAction("php8.3", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
-                  <Square size={12} />
-                </button>
-              </div>
+              <span class="h-2.5 w-2.5 rounded-full {software && software.php83 !== 'Not Installed' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-500'}" />
+              {#if software && software.php83 !== 'Not Installed'}
+                <div class="flex gap-1">
+                  <button on:click={() => handleAction("php8.3", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
+                    <RotateCcw size={12} />
+                  </button>
+                  <button on:click={() => handleAction("php8.3", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
+                    <Square size={12} />
+                  </button>
+                </div>
+              {/if}
             </div>
           </div>
 
@@ -443,43 +485,51 @@
           <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
             <div class="flex items-center gap-3">
               <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400 text-sm font-bold">PHP</span>
-              <div>
-                <p class="text-xs font-semibold text-foreground">PHP 7.4</p>
+              <div class="max-w-[150px] truncate">
+                <p class="text-xs font-semibold text-foreground truncate" title={software ? software.php74 : "Loading..."}>
+                  {software ? software.php74 : "Loading..."}
+                </p>
                 <p class="text-[10px] text-muted-foreground">Legacy FPM</p>
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-              <div class="flex gap-1">
-                <button on:click={() => handleAction("php7.4", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
-                  <RotateCcw size={12} />
-                </button>
-                <button on:click={() => handleAction("php7.4", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
-                  <Square size={12} />
-                </button>
-              </div>
+              <span class="h-2.5 w-2.5 rounded-full {software && software.php74 !== 'Not Installed' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-500'}" />
+              {#if software && software.php74 !== 'Not Installed'}
+                <div class="flex gap-1">
+                  <button on:click={() => handleAction("php7.4", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
+                    <RotateCcw size={12} />
+                  </button>
+                  <button on:click={() => handleAction("php7.4", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
+                    <Square size={12} />
+                  </button>
+                </div>
+              {/if}
             </div>
           </div>
 
-          <!-- MariaDB -->
+          <!-- MySQL/MariaDB -->
           <div class="flex items-center justify-between rounded-xl border border-border bg-secondary/10 p-4">
             <div class="flex items-center gap-3">
               <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-amber-500 text-sm font-bold">DB</span>
-              <div>
-                <p class="text-xs font-semibold text-foreground">MariaDB</p>
-                <p class="text-[10px] text-muted-foreground">MySQL Database</p>
+              <div class="max-w-[150px] truncate">
+                <p class="text-xs font-semibold text-foreground truncate" title={software ? software.mysql : "Loading..."}>
+                  {software ? software.mysql : "Loading..."}
+                </p>
+                <p class="text-[10px] text-muted-foreground">Database Server</p>
               </div>
             </div>
             <div class="flex items-center gap-2">
-              <span class="h-2.5 w-2.5 rounded-full bg-emerald-500" />
-              <div class="flex gap-1">
-                <button on:click={() => handleAction("mysql", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
-                  <RotateCcw size={12} />
-                </button>
-                <button on:click={() => handleAction("mysql", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
-                  <Square size={12} />
-                </button>
-              </div>
+              <span class="h-2.5 w-2.5 rounded-full {software && software.mysql !== 'Not Installed' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-500'}" />
+              {#if software && software.mysql !== 'Not Installed'}
+                <div class="flex gap-1">
+                  <button on:click={() => handleAction("mysql", "restart")} class="p-1 hover:text-blue-500 transition-colors" title="Restart">
+                    <RotateCcw size={12} />
+                  </button>
+                  <button on:click={() => handleAction("mysql", "stop")} class="p-1 hover:text-rose-500 transition-colors" title="Stop">
+                    <Square size={12} />
+                  </button>
+                </div>
+              {/if}
             </div>
           </div>
         </div>
@@ -617,7 +667,7 @@
 
       <div class="flex items-center justify-between text-[9px] text-muted-foreground">
         <span>Unit: KB/s</span>
-        <span>© aaPanel design emulation</span>
+        <span>© AcmaDash v3.0</span>
       </div>
     </div>
   </div>

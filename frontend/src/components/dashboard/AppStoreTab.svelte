@@ -17,6 +17,7 @@
     ExternalLink, 
     Info
   } from "lucide-svelte"
+  import { toast } from "../../lib/toast"
 
   export let token: string | null = null
 
@@ -132,10 +133,10 @@
         await fetchApps()
       } else {
         const errData = await response.json().catch(() => ({}))
-        alert(errData.error || "Failed to uninstall app")
+        toast.error("Uninstall failed", errData.error || "Failed to uninstall app")
       }
     } catch {
-      alert("Network error")
+      toast.error("Network error", "Could not reach the server.")
     } finally {
       uninstallLoading = false
       uninstallAppId = ""

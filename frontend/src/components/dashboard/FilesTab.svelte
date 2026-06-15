@@ -16,6 +16,7 @@
     FilePlus, 
     ArrowRight 
   } from "lucide-svelte"
+  import { toast } from "../../lib/toast"
 
   export let token: string | null = null
 
@@ -145,7 +146,7 @@
         }),
       })
       if (response.ok) {
-        alert("File saved successfully!")
+        toast.success("File saved", `${editorPath} has been saved successfully.`)
         showEditor = false
         fetchFiles()
       } else {
@@ -214,10 +215,10 @@
         fetchFiles()
       } else {
         const errData = await response.json().catch(() => ({}))
-        alert(errData.error || "Failed to delete item")
+        toast.error("Delete failed", errData.error || "Failed to delete item")
       }
     } catch {
-      alert("Network error")
+      toast.error("Network error", "Could not reach the server.")
     }
   }
 
