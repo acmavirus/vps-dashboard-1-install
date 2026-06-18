@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -551,6 +552,15 @@ func registerAppsRoutes(api *gin.RouterGroup) {
 			}
 		}
 
+		if req.ID == "wordpress-app" || req.ID == "joomla-app" || req.ID == "drupal-app" || req.ID == "prestashop-app" {
+			go func(cID string) {
+				time.Sleep(3 * time.Second)
+				phpConfigCmd := "printf 'upload_max_filesize = 256M\\npost_max_size = 256M\\nmemory_limit = 512M\\nmax_execution_time = 300\\n' > /usr/local/etc/php/conf.d/uploads.ini"
+				_ = exec.Command("docker", "exec", cID, "sh", "-c", phpConfigCmd).Run()
+				_ = exec.Command("docker", "restart", cID).Run()
+			}(containerID)
+		}
+
 		c.JSON(200, gin.H{"status": "ok", "container_id": strings.TrimSpace(string(output))})
 	})
 
@@ -609,6 +619,7 @@ func createNginxProxy(domain string, port string) error {
 	configContent := fmt.Sprintf(`server {
     listen 80;
     server_name %s;
+    client_max_body_size 100M;
 
     access_log %s;
     error_log %s;

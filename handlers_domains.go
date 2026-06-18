@@ -258,6 +258,7 @@ func registerDomainRoutes(api *gin.RouterGroup) {
     server_name %s;
     root %s;
     index index.html index.htm;
+    client_max_body_size 100M;
 
     access_log %s;
     error_log %s;
@@ -284,6 +285,7 @@ func registerDomainRoutes(api *gin.RouterGroup) {
     server_name %s;
     root %s;
     index index.php index.html index.htm;
+    client_max_body_size 100M;
 
     access_log %s;
     error_log %s;
@@ -308,6 +310,7 @@ func registerDomainRoutes(api *gin.RouterGroup) {
 			nginxConfig = fmt.Sprintf(`server {
     listen 80;
     server_name %s;
+    client_max_body_size 100M;
 
     access_log %s;
     error_log %s;
