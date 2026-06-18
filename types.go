@@ -49,11 +49,15 @@ type DockerInfo struct {
 }
 
 type DomainInfo struct {
-	Domain    string `json:"domain"`
-	Status    string `json:"status"` // online, offline
-	Code      int    `json:"code"`
-	Note      string `json:"note,omitempty"`
-	IsStarred bool   `json:"is_starred"`
+	Domain      string    `json:"domain"`
+	Status      string    `json:"status"` // online, offline
+	Code        int       `json:"code"`
+	Note        string    `json:"note,omitempty"`
+	IsStarred   bool      `json:"is_starred"`
+	SSLActive   bool      `json:"ssl_active"`
+	SSLIssuer   string    `json:"ssl_issuer"`
+	SSLExpiry   time.Time `json:"ssl_expiry"`
+	SSLDays     int       `json:"ssl_days"`
 }
 
 type SSLCertInfo struct {

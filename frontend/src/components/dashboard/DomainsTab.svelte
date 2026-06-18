@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { RefreshCw, Trash2, Plus, X, Globe, ShieldCheck, Database, ArrowRight, Loader2, Star } from "lucide-svelte"
+  import { RefreshCw, Trash2, Plus, X, Globe, Shield, ShieldCheck, ShieldAlert, Clock, Database, ArrowRight, Loader2, Star } from "lucide-svelte"
   import type { DomainInfo, DomainDeleteState, DomainNoteState } from "./types"
+  import { toast } from "../../lib/toast"
+  import ConfirmModal from "../ConfirmModal.svelte"
 
   export let token: string | null = null
   export let domains: DomainInfo[] = []
@@ -11,6 +13,86 @@
   export let onRefresh: () => void
   export let onToggleStar: (domainName: string, currentStarred: boolean) => void
   export let onSelectDomain: (domain: DomainInfo) => void
+
+  // SSL Management states
+  let sslActionLoading = false
+  let showSSLModal = false
+  let selectedSSLDomain: DomainInfo | null = null
+  let showIssueConfirm = false
+  let domainToIssueSSL: DomainInfo | null = null
+
+  async function handleIssueSSL(domainName: string) {
+    if (!token) return
+    sslActionLoading = true
+    try {
+      const response = await fetch("/api/ssl/issue", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token
+        },
+        body: JSON.stringify({ domain: domainName })
+      })
+      const data = await response.json()
+      if (response.ok) {
+        toast.success("Thành công", `Đã kích hoạt SSL Let's Encrypt cho tên miền "${domainName}".`)
+        onRefresh()
+      } else {
+        toast.error("Thất bại", data.error || "Không thể kích hoạt SSL.")
+      }
+    } catch {
+      toast.error("Lỗi kết nối", "Không thể kết nối tới máy chủ.")
+    } finally {
+      sslActionLoading = false
+      showIssueConfirm = false
+      domainToIssueSSL = null
+    }
+  }
+
+  async function handleRenewSSL(domainName: string) {
+    if (!token) return
+    sslActionLoading = true
+    try {
+      const response = await fetch("/api/ssl/renew", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token
+        },
+        body: JSON.stringify({ domain: domainName })
+      })
+      const data = await response.json()
+      if (response.ok) {
+        toast.success("Thành công", `Đã gia hạn chứng chỉ SSL cho tên miền "${domainName}".`)
+        onRefresh()
+        if (selectedSSLDomain && selectedSSLDomain.domain === domainName) {
+          selectedSSLDomain = { ...selectedSSLDomain, ssl_days: 90 }
+        }
+      } else {
+        toast.error("Thất bại", data.error || "Gia hạn thất bại.")
+      }
+    } catch {
+      toast.error("Lỗi kết nối", "Không thể kết nối tới máy chủ.")
+    } finally {
+      sslActionLoading = false
+    }
+  }
+
+  function triggerSSLAction(domain: DomainInfo) {
+    if (domain.ssl_active) {
+      selectedSSLDomain = domain
+      showSSLModal = true
+    } else {
+      domainToIssueSSL = domain
+      showIssueConfirm = true
+    }
+  }
+
+  function formatDate(dateStr: string | undefined) {
+    if (!dateStr) return "-"
+    const d = new Date(dateStr)
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  }
 
   // Create website states
   let showCreateModal = false
@@ -120,13 +202,14 @@
             <th class="px-6 py-3 font-medium">Note / Database Info</th>
             <th class="px-6 py-3 font-medium">Status</th>
             <th class="px-6 py-3 font-medium">HTTP Code</th>
+            <th class="px-6 py-3 font-medium">SSL</th>
             <th class="px-6 py-3 font-medium text-right">Action</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-border">
           {#if domains.length === 0}
             <tr>
-              <td colspan="5" class="px-6 py-10 text-center text-muted-foreground font-light">
+              <td colspan="6" class="px-6 py-10 text-center text-muted-foreground font-light">
                 Chưa có website nào được thêm. Bấm "Thêm Website" để bắt đầu.
               </td>
             </tr>
@@ -172,6 +255,29 @@
                 <span class={domain.code >= 200 && domain.code < 400 ? "text-emerald-400 font-medium" : "text-rose-400 font-medium"}>
                   {domain.code || "--"}
                 </span>
+              </td>
+              <td class="px-6 py-4">
+                {#if domain.ssl_active}
+                  <button
+                    type="button"
+                    on:click={() => triggerSSLAction(domain)}
+                    class="inline-flex items-center gap-1.5 text-emerald-500 hover:text-emerald-400 font-semibold transition-colors focus:outline-none"
+                    title="Xem chi tiết hoặc gia hạn SSL"
+                  >
+                    <ShieldCheck size={14} />
+                    <span>Còn {domain.ssl_days} ngày</span>
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    on:click={() => triggerSSLAction(domain)}
+                    class="inline-flex items-center gap-1.5 text-amber-500 hover:text-amber-400 font-semibold transition-colors focus:outline-none"
+                    title="Kích hoạt Let's Encrypt SSL"
+                  >
+                    <ShieldAlert size={14} />
+                    <span class="underline decoration-dotted decoration-amber-500/50 hover:decoration-amber-400">Chưa thiết lập</span>
+                  </button>
+                {/if}
               </td>
               <td class="px-6 py-4 text-right">
                 <div class="flex items-center justify-end gap-3.5">
@@ -401,5 +507,87 @@
       </div>
     </div>
   {/if}
+
+  <!-- SSL Detail Modal -->
+  {#if showSSLModal && selectedSSLDomain}
+    <div class="fixed inset-0 z-[9900] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+      <div class="w-full max-w-md rounded-2xl border border-border bg-card shadow-2xl overflow-hidden transform transition-all">
+        <!-- Modal Header -->
+        <div class="flex items-center justify-between border-b border-border px-6 py-4">
+          <div class="flex items-center gap-2">
+            <Shield class="text-emerald-500" size={18} />
+            <h3 class="text-base font-semibold text-foreground">Chi tiết SSL Certificate</h3>
+          </div>
+          <button
+            type="button"
+            on:click={() => showSSLModal = false}
+            class="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <!-- Modal Body -->
+        <div class="p-6 space-y-4">
+          <div class="grid grid-cols-3 gap-2 py-1.5 border-b border-border/50 text-xs">
+            <span class="text-muted-foreground font-light">Tên miền</span>
+            <span class="col-span-2 font-semibold text-foreground">{selectedSSLDomain.domain}</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 py-1.5 border-b border-border/50 text-xs">
+            <span class="text-muted-foreground font-light">Nhà phát hành</span>
+            <span class="col-span-2 text-foreground font-mono">{selectedSSLDomain.ssl_issuer || "Let's Encrypt"}</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 py-1.5 border-b border-border/50 text-xs">
+            <span class="text-muted-foreground font-light">Ngày hết hạn</span>
+            <span class="col-span-2 text-foreground font-mono">{formatDate(selectedSSLDomain.ssl_expiry)}</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 py-1.5 text-xs">
+            <span class="text-muted-foreground font-light">Thời hạn còn lại</span>
+            <span class="col-span-2 font-semibold font-mono">
+              <span class={selectedSSLDomain.ssl_days && selectedSSLDomain.ssl_days <= 15 ? "text-rose-500 font-bold" : selectedSSLDomain.ssl_days && selectedSSLDomain.ssl_days <= 30 ? "text-amber-500" : "text-emerald-500"}>
+                {selectedSSLDomain.ssl_days} ngày
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="flex items-center justify-end gap-3 border-t border-border px-6 py-4 bg-secondary/10">
+          <button
+            type="button"
+            on:click={() => showSSLModal = false}
+            class="rounded-lg border border-border px-4 py-2 text-xs font-semibold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            Đóng
+          </button>
+          <button
+            type="button"
+            on:click={() => handleRenewSSL(selectedSSLDomain?.domain || "")}
+            disabled={sslActionLoading}
+            class="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 text-xs font-semibold text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+          >
+            {#if sslActionLoading}
+              <Loader2 size={13} class="animate-spin" />
+              <span>Đang gia hạn...</span>
+            {:else}
+              <RefreshCw size={13} />
+              <span>Gia hạn SSL (Renew)</span>
+            {/if}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Confirm Issue SSL Modal -->
+  <ConfirmModal
+    bind:isOpen={showIssueConfirm}
+    title="Kích hoạt Let's Encrypt SSL"
+    message="Bạn có muốn kích hoạt và cấp chứng chỉ Let's Encrypt SSL miễn phí cho tên miền '{domainToIssueSSL?.domain}' không? Tên miền cần phải được cấu hình DNS trỏ đúng về địa chỉ IP của máy chủ này để quá trình cấp chứng chỉ thành công."
+    confirmLabel="Kích hoạt (Issue)"
+    cancelLabel="Hủy"
+    variant="info"
+    onConfirm={() => handleIssueSSL(domainToIssueSSL?.domain || "")}
+  />
 
 </div>

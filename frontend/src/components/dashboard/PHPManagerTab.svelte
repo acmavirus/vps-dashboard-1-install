@@ -71,11 +71,19 @@
     if (!selectedVersion) return
     loadingSettings = true
     try {
-      const response = await fetch(`/api/php/settings?version=${selectedVersion}`, {
+      const verObj = versions.find((v) => v.version === selectedVersion)
+      const queryParam = verObj?.is_container
+        ? `version=${verObj.container_id}&is_container=true`
+        : `version=${selectedVersion}`
+
+      const response = await fetch(`/api/php/settings?${queryParam}`, {
         headers: { Authorization: token || "" },
       })
       if (response.ok) {
         settings = await response.json()
+      } else {
+        const data = await response.json()
+        toast.error("Error", data.error || "Failed to load PHP settings.")
       }
     } catch (err) {
       console.error(err)
@@ -88,6 +96,10 @@
   async function saveSettings() {
     savingSettings = true
     try {
+      const verObj = versions.find((v) => v.version === selectedVersion)
+      const targetVersion = verObj?.is_container ? verObj.container_id : selectedVersion
+      const isContainer = verObj?.is_container || false
+
       const response = await fetch("/api/php/settings", {
         method: "POST",
         headers: {
@@ -95,13 +107,16 @@
           Authorization: token || "",
         },
         body: JSON.stringify({
-          version: selectedVersion,
+          version: targetVersion,
+          is_container: isContainer,
           settings,
         }),
       })
 
       if (response.ok) {
-        toast.success("Success", `PHP ${selectedVersion} settings updated. PHP-FPM service restarted.`)
+        const targetName = isContainer ? `Container ${targetVersion}` : `PHP ${selectedVersion}`
+        const actionMsg = isContainer ? "Container restarted." : "PHP-FPM service restarted."
+        toast.success("Success", `${targetName} settings updated. ${actionMsg}`)
       } else {
         const data = await response.json()
         toast.error("Error", data.error || "Failed to save settings.")
@@ -118,11 +133,19 @@
     if (!selectedVersion) return
     loadingExtensions = true
     try {
-      const response = await fetch(`/api/php/extensions?version=${selectedVersion}`, {
+      const verObj = versions.find((v) => v.version === selectedVersion)
+      const queryParam = verObj?.is_container
+        ? `version=${verObj.container_id}&is_container=true`
+        : `version=${selectedVersion}`
+
+      const response = await fetch(`/api/php/extensions?${queryParam}`, {
         headers: { Authorization: token || "" },
       })
       if (response.ok) {
         extensions = await response.json()
+      } else {
+        const data = await response.json()
+        toast.error("Error", data.error || "Failed to load PHP extensions.")
       }
     } catch (err) {
       console.error(err)
@@ -135,6 +158,10 @@
   async function toggleExtension(name: string, enable: boolean) {
     togglingExtension = name
     try {
+      const verObj = versions.find((v) => v.version === selectedVersion)
+      const targetVersion = verObj?.is_container ? verObj.container_id : selectedVersion
+      const isContainer = verObj?.is_container || false
+
       const response = await fetch("/api/php/extensions/toggle", {
         method: "POST",
         headers: {
@@ -142,7 +169,8 @@
           Authorization: token || "",
         },
         body: JSON.stringify({
-          version: selectedVersion,
+          version: targetVersion,
+          is_container: isContainer,
           name,
           enable,
         }),
@@ -152,9 +180,11 @@
         extensions = extensions.map((ext) =>
           ext.name === name ? { ...ext, enabled: enable } : ext
         )
+        const targetName = isContainer ? `Container ${targetVersion}` : `PHP ${selectedVersion}`
+        const actionMsg = isContainer ? "Container restarted." : "PHP-FPM restarted."
         toast.success(
           "Success",
-          `Extension "${name}" ${enable ? "enabled" : "disabled"}. PHP-FPM restarted.`
+          `Extension "${name}" ${enable ? "enabled" : "disabled"} for ${targetName}. ${actionMsg}`
         )
       } else {
         const data = await response.json()
@@ -205,7 +235,11 @@
           >
             {#each versions as v}
               <option value={v.version}>
-                PHP {v.version} ({v.status})
+                {#if v.is_container}
+                  Container: {v.version} ({v.status})
+                {:else}
+                  PHP {v.version} ({v.status})
+                {/if}
               </option>
             {/each}
           </select>

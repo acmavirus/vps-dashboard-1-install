@@ -20,7 +20,7 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 )
 
-var Version = "v4.0.0"
+var Version = "v3.1.0"
 
 //go:embed all:frontend/dist
 var frontendFS embed.FS

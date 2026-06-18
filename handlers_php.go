@@ -9,13 +9,279 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 )
 
 type PHPVersionInfo struct {
-	Version string `json:"version"`
-	Status  string `json:"status"` // running, stopped, not_installed
+	Version     string `json:"version"`
+	Status      string `json:"status"` // running, stopped, not_installed
+	IsContainer bool   `json:"is_container"`
+	ContainerID string `json:"container_id"`
+}
+
+type ContainerPHPInfo struct {
+	IsPHP   bool
+	Version string
+}
+
+var (
+	phpContainerCache      = make(map[string]ContainerPHPInfo)
+	phpContainerCacheMutex sync.RWMutex
+)
+
+func getPHPCache(name string) (ContainerPHPInfo, bool) {
+	phpContainerCacheMutex.RLock()
+	defer phpContainerCacheMutex.RUnlock()
+	info, exists := phpContainerCache[name]
+	return info, exists
+}
+
+func setPHPCache(name string, info ContainerPHPInfo) {
+	phpContainerCacheMutex.Lock()
+	defer phpContainerCacheMutex.Unlock()
+	phpContainerCache[name] = info
+}
+
+func isLikelyPHPImage(image string) bool {
+	img := strings.ToLower(image)
+	return strings.Contains(img, "php") ||
+		strings.Contains(img, "wordpress") ||
+		strings.Contains(img, "joomla") ||
+		strings.Contains(img, "drupal") ||
+		strings.Contains(img, "prestashop")
+}
+
+func detectContainerPHP(name string) ContainerPHPInfo {
+	if info, exists := getPHPCache(name); exists {
+		return info
+	}
+
+	cmd := exec.Command("docker", "exec", name, "php", "-r", "echo PHP_VERSION;")
+	out, err := cmd.Output()
+	if err != nil {
+		// Do not cache false permanently if container is simply not running or not found
+		return ContainerPHPInfo{IsPHP: false, Version: ""}
+	}
+
+	ver := strings.TrimSpace(string(out))
+	if ver == "" {
+		info := ContainerPHPInfo{IsPHP: false, Version: ""}
+		setPHPCache(name, info)
+		return info
+	}
+
+	info := ContainerPHPInfo{IsPHP: true, Version: ver}
+	setPHPCache(name, info)
+	return info
+}
+
+func getDockerPHPVersions() []PHPVersionInfo {
+	if runtime.GOOS == "windows" {
+		return []PHPVersionInfo{
+			{
+				Version:     "wordpress-app (PHP 8.2)",
+				Status:      "running",
+				IsContainer: true,
+				ContainerID: "wordpress-app",
+			},
+			{
+				Version:     "prestashop-app (PHP 8.1)",
+				Status:      "stopped",
+				IsContainer: true,
+				ContainerID: "prestashop-app",
+			},
+		}
+	}
+
+	var list []PHPVersionInfo
+
+	cmd := exec.Command("docker", "ps", "-a", "--format", "{{.Names}}|{{.State}}|{{.Image}}")
+	out, err := cmd.Output()
+	if err != nil {
+		return list
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		if len(parts) < 3 {
+			continue
+		}
+		name := parts[0]
+		state := parts[1]
+		image := parts[2]
+
+		isRunning := state == "running"
+
+		var phpInfo ContainerPHPInfo
+		if isRunning {
+			phpInfo = detectContainerPHP(name)
+		} else {
+			if cachedInfo, exists := getPHPCache(name); exists {
+				phpInfo = cachedInfo
+			} else if isLikelyPHPImage(image) {
+				phpInfo = ContainerPHPInfo{IsPHP: true, Version: "Unknown"}
+			}
+		}
+
+		if phpInfo.IsPHP {
+			statusStr := "stopped"
+			if isRunning {
+				statusStr = "running"
+			}
+			displayName := name
+			if phpInfo.Version != "" && phpInfo.Version != "Unknown" {
+				displayName = fmt.Sprintf("%s (PHP %s)", name, phpInfo.Version)
+			}
+			list = append(list, PHPVersionInfo{
+				Version:     displayName,
+				Status:      statusStr,
+				IsContainer: true,
+				ContainerID: name,
+			})
+		}
+	}
+
+	return list
+}
+
+func findContainerIniScanDir(container string) string {
+	cmd := exec.Command("docker", "exec", container, "php", "--ini")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "Scan for additional .ini files in") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				path := strings.TrimSpace(parts[1])
+				if path != "(none)" && path != "" {
+					return path
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func findContainerLoadedIni(container string) string {
+	cmd := exec.Command("docker", "exec", container, "php", "-r", "echo php_ini_loaded_file();")
+	out, err := cmd.Output()
+	if err == nil {
+		path := strings.TrimSpace(string(out))
+		if path != "" && path != "false" {
+			return path
+		}
+	}
+	return ""
+}
+
+func getContainerPHPExtensions(container string) []PHPExtension {
+	standardExts := []string{"opcache", "redis", "imagick", "gd", "pdo_mysql", "curl", "mbstring", "xml", "zip"}
+	var list []PHPExtension
+
+	if runtime.GOOS == "windows" {
+		for i, ext := range standardExts {
+			list = append(list, PHPExtension{
+				Name:    ext,
+				Enabled: i%2 == 0,
+			})
+		}
+		return list
+	}
+
+	cmd := exec.Command("docker", "exec", container, "php", "-m")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return list
+	}
+
+	modules := make(map[string]bool)
+	lines := strings.Split(string(out), "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(strings.ToLower(l))
+		if l != "" && !strings.Contains(l, "[") {
+			modules[l] = true
+		}
+	}
+
+	for _, ext := range standardExts {
+		enabled := false
+		extLower := strings.ToLower(ext)
+		if modules[extLower] {
+			enabled = true
+		} else {
+			for m := range modules {
+				if strings.Contains(m, extLower) {
+					enabled = true
+					break
+				}
+			}
+		}
+
+		list = append(list, PHPExtension{
+			Name:    ext,
+			Enabled: enabled,
+		})
+	}
+
+	return list
+}
+
+func toggleContainerPHPExtension(container string, name string, enable bool) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+
+	checkCmd := exec.Command("docker", "exec", container, "which", "docker-php-ext-enable")
+	err := checkCmd.Run()
+	if err == nil {
+		action := "docker-php-ext-disable"
+		if enable {
+			action = "docker-php-ext-enable"
+		}
+		if enable {
+			cmd := exec.Command("docker", "exec", container, action, name)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to enable extension: %s (%s)", err.Error(), string(out))
+			}
+			return nil
+		} else {
+			disableCmd := fmt.Sprintf("rm -f /usr/local/etc/php/conf.d/*%s*.ini", name)
+			cmd := exec.Command("docker", "exec", container, "sh", "-c", disableCmd)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("failed to disable extension: %s (%s)", err.Error(), string(out))
+			}
+			return nil
+		}
+	}
+
+	checkCmd2 := exec.Command("docker", "exec", container, "which", "phpenmod")
+	err2 := checkCmd2.Run()
+	if err2 == nil {
+		action := "phpdismod"
+		if enable {
+			action = "phpenmod"
+		}
+		cmd := exec.Command("docker", "exec", container, action, name)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to toggle extension via phpenmod: %s (%s)", err.Error(), string(out))
+		}
+		return nil
+	}
+
+	return fmt.Errorf("toggling extensions is not supported for this container. No standard php extension manager (docker-php-ext-enable/phpenmod) was found.")
 }
 
 type PHPSettings struct {
@@ -32,17 +298,69 @@ type PHPExtension struct {
 }
 
 func registerPHPRoutes(api *gin.RouterGroup) {
-	// 1. Get installed PHP versions and statuses
+	// 1. Get installed PHP versions and statuses (including Docker containers)
 	api.GET("/php/versions", func(c *gin.Context) {
 		versions := getPHPVersions()
+		dockerVersions := getDockerPHPVersions()
+		versions = append(versions, dockerVersions...)
 		c.JSON(200, versions)
 	})
 
-	// 2. Get settings for a specific PHP version
+	// 2. Get settings for a specific PHP version or container
 	api.GET("/php/settings", func(c *gin.Context) {
 		version := c.Query("version")
 		if version == "" {
-			c.JSON(400, gin.H{"error": "Version is required"})
+			c.JSON(400, gin.H{"error": "Version or container ID is required"})
+			return
+		}
+		isContainer := c.Query("is_container") == "true"
+
+		if isContainer {
+			if runtime.GOOS == "windows" {
+				// Simulation settings for container
+				settings := PHPSettings{
+					MemoryLimit:        "256M",
+					UploadMaxFilesize:  "50M",
+					PostMaxSize:        "50M",
+					MaxExecutionTime:   "120",
+					DisplayErrors:      "On",
+				}
+				c.JSON(200, settings)
+				return
+			}
+
+			// Verify if container is running
+			cmdCheck := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", version)
+			outCheck, errCheck := cmdCheck.Output()
+			if errCheck != nil || strings.TrimSpace(string(outCheck)) != "true" {
+				c.JSON(400, gin.H{"error": "Container is stopped. Please start the container first to manage its PHP settings."})
+				return
+			}
+
+			// Get settings from running container
+			cmd := exec.Command("docker", "exec", version, "php", "-r", "echo ini_get('memory_limit') . '|' . ini_get('upload_max_filesize') . '|' . ini_get('post_max_size') . '|' . ini_get('max_execution_time') . '|' . ini_get('display_errors');")
+			out, err := cmd.Output()
+			if err != nil {
+				c.JSON(500, gin.H{"error": "Failed to read PHP settings from container: " + err.Error()})
+				return
+			}
+			parts := strings.Split(strings.TrimSpace(string(out)), "|")
+			if len(parts) < 5 {
+				c.JSON(500, gin.H{"error": "Invalid response from container PHP: " + string(out)})
+				return
+			}
+			displayErr := "Off"
+			if parts[4] == "1" || strings.ToLower(parts[4]) == "on" || strings.ToLower(parts[4]) == "stdout" || strings.ToLower(parts[4]) == "stderr" {
+				displayErr = "On"
+			}
+			settings := PHPSettings{
+				MemoryLimit:        parts[0],
+				UploadMaxFilesize:  parts[1],
+				PostMaxSize:        parts[2],
+				MaxExecutionTime:   parts[3],
+				DisplayErrors:      displayErr,
+			}
+			c.JSON(200, settings)
 			return
 		}
 		
@@ -61,14 +379,61 @@ func registerPHPRoutes(api *gin.RouterGroup) {
 		c.JSON(200, settings)
 	})
 
-	// 3. Update settings for a specific PHP version
+	// 3. Update settings for a specific PHP version or container
 	api.POST("/php/settings", func(c *gin.Context) {
 		var req struct {
-			Version  string      `json:"version"`
-			Settings PHPSettings `json:"settings"`
+			Version     string      `json:"version"`
+			IsContainer bool        `json:"is_container"`
+			Settings    PHPSettings `json:"settings"`
 		}
 		if err := c.BindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		if req.IsContainer {
+			if runtime.GOOS == "windows" {
+				c.JSON(200, gin.H{"status": "ok", "message": "Simulation: Saved settings for container " + req.Version})
+				return
+			}
+
+			// Verify if container is running
+			cmdCheck := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", req.Version)
+			outCheck, errCheck := cmdCheck.Output()
+			if errCheck != nil || strings.TrimSpace(string(outCheck)) != "true" {
+				c.JSON(400, gin.H{"error": "Container is stopped. Please start the container first to manage its PHP settings."})
+				return
+			}
+
+			// Write custom configuration to /usr/local/etc/php/conf.d/uploads.ini (standard official path)
+			// or find standard ini scan dir
+			scanDir := findContainerIniScanDir(req.Version)
+			var destPath string
+			if scanDir != "" {
+				destPath = filepath.ToSlash(filepath.Join(scanDir, "uploads.ini"))
+			} else {
+				loadedIni := findContainerLoadedIni(req.Version)
+				if loadedIni != "" {
+					destPath = loadedIni
+				} else {
+					destPath = "/usr/local/etc/php/conf.d/uploads.ini"
+				}
+			}
+
+			iniContent := fmt.Sprintf("memory_limit = %s\nupload_max_filesize = %s\npost_max_size = %s\nmax_execution_time = %s\ndisplay_errors = %s\n",
+				req.Settings.MemoryLimit, req.Settings.UploadMaxFilesize, req.Settings.PostMaxSize, req.Settings.MaxExecutionTime, req.Settings.DisplayErrors)
+
+			writeCmd := exec.Command("docker", "exec", "-i", req.Version, "sh", "-c", fmt.Sprintf("mkdir -p %s && cat > %s", filepath.Dir(destPath), destPath))
+			writeCmd.Stdin = strings.NewReader(iniContent)
+			output, err := writeCmd.CombinedOutput()
+			if err != nil {
+				c.JSON(500, gin.H{"error": fmt.Sprintf("Failed to write config into container: %s (%s)", err.Error(), string(output))})
+				return
+			}
+
+			// Restart container to apply settings
+			_ = exec.Command("docker", "restart", req.Version).Run()
+			c.JSON(200, gin.H{"status": "ok"})
 			return
 		}
 
@@ -93,11 +458,27 @@ func registerPHPRoutes(api *gin.RouterGroup) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// 4. Get extensions list for a specific PHP version
+	// 4. Get extensions list for a specific PHP version or container
 	api.GET("/php/extensions", func(c *gin.Context) {
 		version := c.Query("version")
 		if version == "" {
-			c.JSON(400, gin.H{"error": "Version is required"})
+			c.JSON(400, gin.H{"error": "Version or container ID is required"})
+			return
+		}
+		isContainer := c.Query("is_container") == "true"
+
+		if isContainer {
+			if runtime.GOOS != "windows" {
+				// Verify if container is running
+				cmdCheck := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", version)
+				outCheck, errCheck := cmdCheck.Output()
+				if errCheck != nil || strings.TrimSpace(string(outCheck)) != "true" {
+					c.JSON(400, gin.H{"error": "Container is stopped. Please start the container first to manage its PHP extensions."})
+					return
+				}
+			}
+			exts := getContainerPHPExtensions(version)
+			c.JSON(200, exts)
 			return
 		}
 
@@ -108,12 +489,34 @@ func registerPHPRoutes(api *gin.RouterGroup) {
 	// 5. Toggle extension state
 	api.POST("/php/extensions/toggle", func(c *gin.Context) {
 		var req struct {
-			Version string `json:"version"`
-			Name    string `json:"name"`
-			Enable  bool   `json:"enable"`
+			Version     string `json:"version"`
+			IsContainer bool   `json:"is_container"`
+			Name        string `json:"name"`
+			Enable      bool   `json:"enable"`
 		}
 		if err := c.BindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		if req.IsContainer {
+			if runtime.GOOS != "windows" {
+				// Verify if container is running
+				cmdCheck := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", req.Version)
+				outCheck, errCheck := cmdCheck.Output()
+				if errCheck != nil || strings.TrimSpace(string(outCheck)) != "true" {
+					c.JSON(400, gin.H{"error": "Container is stopped. Please start the container first to manage its PHP extensions."})
+					return
+				}
+			}
+			err := toggleContainerPHPExtension(req.Version, req.Name, req.Enable)
+			if err != nil {
+				c.JSON(500, gin.H{"error": err.Error()})
+				return
+			}
+			// Restart container to apply
+			_ = exec.Command("docker", "restart", req.Version).Run()
+			c.JSON(200, gin.H{"status": "ok"})
 			return
 		}
 

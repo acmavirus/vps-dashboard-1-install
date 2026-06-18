@@ -77,6 +77,10 @@ export interface DomainInfo {
   code: number
   note?: string
   is_starred?: boolean
+  ssl_active?: boolean
+  ssl_issuer?: string
+  ssl_expiry?: string
+  ssl_days?: number
 }
 
 export interface DomainDeleteState {

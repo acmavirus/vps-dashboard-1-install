@@ -54,7 +54,6 @@
   import FtpTab from "./components/dashboard/FtpTab.svelte"
   import CronTab from "./components/dashboard/CronTab.svelte"
   import SettingsTab from "./components/dashboard/SettingsTab.svelte"
-  import SSLTab from "./components/dashboard/SSLTab.svelte"
   import PHPManagerTab from "./components/dashboard/PHPManagerTab.svelte"
   import TerminalTab from "./components/dashboard/TerminalTab.svelte"
   import BackupTab from "./components/dashboard/BackupTab.svelte"
@@ -585,7 +584,6 @@
     { key: "processes", label: "Monitor", icon: Cpu, disabled: false, description: "Top running processes" },
     { key: "nodes", label: "Nodes (PM2)", icon: Terminal, disabled: false, description: "PM2 applications and actions" },
     { key: "security", label: "Security", icon: ShieldAlert, disabled: false, description: "Firewall & intrusion protection" },
-    { key: "ssl", label: "SSL Manager", icon: Shield, disabled: false, description: "Manage SSL certificates" },
     { key: "files", label: "Files", icon: HardDrive, disabled: false, description: "Web-based file explorer" },
     { key: "logs", label: "Logs", icon: FileText, disabled: false, description: "System and nginx logs" },
     { key: "cron", label: "Cron", icon: Clock, disabled: false, description: "Scheduled task execution" },
@@ -1111,8 +1109,6 @@
               <ProcessesTab {processes} {token} onRefresh={poll} />
             {:else if appTab === "docker"}
               <DockerTab {containers} {token} onRefresh={poll} />
-            {:else if appTab === "ssl"}
-              <SSLTab {token} />
             {:else if appTab === "nodes"}
               <NodesTab {pm2} {handlePM2Action} {formatUptime} />
             {:else if appTab === "domains"}

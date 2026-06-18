@@ -424,6 +424,40 @@ func registerDomainRoutes(api *gin.RouterGroup) {
 		c.JSON(200, getSSLCertificates())
 	})
 
+	api.POST("/ssl/issue", func(c *gin.Context) {
+		var req struct {
+			Domain string `json:"domain"`
+		}
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		domain, err := sanitizeDomain(req.Domain)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "Invalid domain"})
+			return
+		}
+
+		if runtime.GOOS == "windows" {
+			clearDomainCache()
+			c.JSON(200, gin.H{"status": "ok", "message": "Simulation: SSL issued successfully for " + domain})
+			return
+		}
+
+		cmd := exec.Command("certbot", "--nginx", "-d", domain, "--non-interactive", "--agree-tos", "--register-unsafely-without-email")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to issue SSL: " + err.Error(), "details": string(output)})
+			return
+		}
+
+		_ = reloadNginx()
+		clearDomainCache()
+
+		c.JSON(200, gin.H{"status": "ok", "message": string(output)})
+	})
+
 	api.POST("/ssl/renew", func(c *gin.Context) {
 		var req struct {
 			Domain string `json:"domain"`
@@ -440,6 +474,7 @@ func registerDomainRoutes(api *gin.RouterGroup) {
 		}
 
 		if runtime.GOOS == "windows" {
+			clearDomainCache()
 			c.JSON(200, gin.H{"status": "ok", "message": "Simulation: Renewed SSL for " + domain})
 			return
 		}
@@ -452,6 +487,7 @@ func registerDomainRoutes(api *gin.RouterGroup) {
 		}
 
 		_ = reloadNginx()
+		clearDomainCache()
 
 		c.JSON(200, gin.H{"status": "ok", "message": string(output)})
 	})
@@ -843,11 +879,29 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 }
 
 func getDomains(scan bool) []DomainInfo {
+	certs := getSSLCertificates()
+	certMap := make(map[string]SSLCertInfo)
+	for _, c := range certs {
+		certMap[strings.ToLower(c.Domain)] = c
+	}
+
 	if !scan && cachedDomains != nil && time.Since(lastDomainCheck) < 30*time.Second {
 		// Populate dynamic status for cached domains
 		for i, d := range cachedDomains {
 			cachedDomains[i].Note = getDomainNoteSQL(d.Domain)
 			cachedDomains[i].IsStarred = getDomainStarredSQL(d.Domain)
+			
+			if c, found := certMap[strings.ToLower(d.Domain)]; found {
+				cachedDomains[i].SSLActive = true
+				cachedDomains[i].SSLIssuer = c.Issuer
+				cachedDomains[i].SSLExpiry = c.ExpiryDate
+				cachedDomains[i].SSLDays = c.DaysLeft
+			} else {
+				cachedDomains[i].SSLActive = false
+				cachedDomains[i].SSLIssuer = ""
+				cachedDomains[i].SSLExpiry = time.Time{}
+				cachedDomains[i].SSLDays = 0
+			}
 		}
 		return cachedDomains
 	}
@@ -900,12 +954,29 @@ func getDomains(scan bool) []DomainInfo {
 			}
 		}
 
+		// Check SSL
+		sslActive := false
+		sslIssuer := ""
+		var sslExpiry time.Time
+		sslDays := 0
+
+		if c, found := certMap[strings.ToLower(domain)]; found {
+			sslActive = true
+			sslIssuer = c.Issuer
+			sslExpiry = c.ExpiryDate
+			sslDays = c.DaysLeft
+		}
+
 		list = append(list, DomainInfo{
-			Domain:    domain,
-			Status:    status,
+			Domain:      domain,
+			Status:      status,
 			Code:      code,
-			Note:      getDomainNoteSQL(domain),
-			IsStarred: getDomainStarredSQL(domain),
+			Note:        getDomainNoteSQL(domain),
+			IsStarred:   getDomainStarredSQL(domain),
+			SSLActive:   sslActive,
+			SSLIssuer:   sslIssuer,
+			SSLExpiry:   sslExpiry,
+			SSLDays:     sslDays,
 		})
 	}
 
