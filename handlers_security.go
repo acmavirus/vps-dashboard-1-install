@@ -12,12 +12,18 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 var ruleRegex = regexp.MustCompile(`^\[\s*(\d+)\]\s+(.*?)\s+(ALLOW IN|DENY IN|ALLOW OUT|DENY OUT|ALLOW|DENY)\s+(.*)$`)
+
+var (
+	spamAlertsMutex  sync.RWMutex
+	ActiveSpamAlerts = []SpamAlert{}
+)
 
 func registerSecurityRoutes(api *gin.RouterGroup) {
 	api.GET("/security/settings", func(c *gin.Context) {
@@ -508,9 +514,6 @@ func parseNginxAccessLogLine(line string) (ip, method, uri, ua string, ok bool) 
 
 func runIPSScan(offsets map[string]int64) {
 	settings := loadSecuritySettings()
-	if !settings.AutoBanEnabled {
-		return
-	}
 
 	paths := getDomainPaths()
 	nginxLogDir := paths.nginxLogDir
@@ -535,6 +538,8 @@ func runIPSScan(offsets map[string]int64) {
 	}
 
 	bannedIPs := getBannedIPs()
+
+	var currentAlerts []SpamAlert
 
 	for _, logPath := range logFiles {
 		fileInfo, err := os.Stat(logPath)
@@ -576,6 +581,9 @@ func runIPSScan(offsets map[string]int64) {
 		scanner := bufio.NewScanner(file)
 		ipAttempts := make(map[string]int)
 
+		totalRequests := 0
+		uniqueIPs := make(map[string]bool)
+
 		for scanner.Scan() {
 			line := scanner.Text()
 			ip, _, uri, ua, ok := parseNginxAccessLogLine(line)
@@ -591,59 +599,91 @@ func runIPSScan(offsets map[string]int64) {
 				continue
 			}
 
-			isProbe := false
-			for _, pattern := range settings.ProbePatterns {
-				if strings.Contains(strings.ToLower(uri), strings.ToLower(pattern)) {
-					isProbe = true
-					break
+			// Track request counts for spam detection
+			totalRequests++
+			uniqueIPs[ip] = true
+
+			// Run intrusion detection (AutoBan) only if enabled
+			if settings.AutoBanEnabled {
+				isProbe := false
+				for _, pattern := range settings.ProbePatterns {
+					if strings.Contains(strings.ToLower(uri), strings.ToLower(pattern)) {
+						isProbe = true
+						break
+					}
 				}
-			}
 
-			if isProbe {
-				ipAttempts[ip]++
+				if isProbe {
+					ipAttempts[ip]++
 
-				if ipAttempts[ip] >= settings.BanThreshold {
-					if bannedIPs[ip] {
-						continue
-					}
-
-					actionResult := "Banned"
-					if runtime.GOOS == "windows" {
-						log.Printf("[IPS SIMULATION] Ban IP %s for probing %s on %s\n", ip, uri, domain)
-						actionResult = "Simulation Blocked"
-					} else {
-						cmd := exec.Command("ufw", "insert", "1", "deny", "from", ip, "to", "any")
-						output, cmdErr := cmd.CombinedOutput()
-						if cmdErr != nil {
-							log.Printf("[IPS ERROR] Failed to ban IP %s: %s\n", ip, string(output))
-							actionResult = "Failed to Ban"
-						} else {
-							log.Printf("[IPS] Banned IP %s for probing %s on %s\n", ip, uri, domain)
-							bannedIPs[ip] = true
+					if ipAttempts[ip] >= settings.BanThreshold {
+						if bannedIPs[ip] {
+							continue
 						}
-					}
 
-					entry := SecurityLogEntry{
-						IP:        ip,
-						Timestamp: time.Now(),
-						URI:       uri,
-						Domain:    domain,
-						UserAgent: ua,
-						Action:    actionResult,
-					}
-					_ = logSecurityEventSQL(entry)
+						actionResult := "Banned"
+						if runtime.GOOS == "windows" {
+							log.Printf("[IPS SIMULATION] Ban IP %s for probing %s on %s\n", ip, uri, domain)
+							actionResult = "Simulation Blocked"
+						} else {
+							cmd := exec.Command("ufw", "insert", "1", "deny", "from", ip, "to", "any")
+							output, cmdErr := cmd.CombinedOutput()
+							if cmdErr != nil {
+								log.Printf("[IPS ERROR] Failed to ban IP %s: %s\n", ip, string(output))
+								actionResult = "Failed to Ban"
+							} else {
+								log.Printf("[IPS] Banned IP %s for probing %s on %s\n", ip, uri, domain)
+								bannedIPs[ip] = true
+							}
+						}
 
-					if settings.TelegramAlerts {
-						msg := fmt.Sprintf("🛡️ [Security Auto-Ban] VPS: %s\nIP: %s\nAction: %s\nProbed: %s\nDomain: %s\nUser Agent: %s",
-							getHostname(), ip, actionResult, uri, domain, ua)
-						go sendTelegram(msg)
+						entry := SecurityLogEntry{
+							IP:        ip,
+							Timestamp: time.Now(),
+							URI:       uri,
+							Domain:    domain,
+							UserAgent: ua,
+							Action:    actionResult,
+						}
+						_ = logSecurityEventSQL(entry)
+
+						if settings.TelegramAlerts {
+							msg := fmt.Sprintf("🛡️ [Security Auto-Ban] VPS: %s\nIP: %s\nAction: %s\nProbed: %s\nDomain: %s\nUser Agent: %s",
+								getHostname(), ip, actionResult, uri, domain, ua)
+							go sendTelegram(msg)
+						}
 					}
 				}
 			}
 		}
 		file.Close()
 		offsets[logPath] = size
+
+		// Check if this domain is being spammed (e.g. > 50 requests in 30s)
+		if totalRequests >= 50 {
+			uniqueRatio := float64(len(uniqueIPs)) / float64(totalRequests)
+			if uniqueRatio > 0.5 || totalRequests >= 150 {
+				severity := "medium"
+				if totalRequests >= 300 {
+					severity = "critical"
+				} else if totalRequests >= 150 {
+					severity = "high"
+				}
+
+				currentAlerts = append(currentAlerts, SpamAlert{
+					Domain:       domain,
+					RequestCount: totalRequests,
+					UniqueIPs:    len(uniqueIPs),
+					DetectedAt:   time.Now(),
+					Severity:     severity,
+				})
+			}
+		}
 	}
+
+	spamAlertsMutex.Lock()
+	ActiveSpamAlerts = currentAlerts
+	spamAlertsMutex.Unlock()
 }
 
 func startIntrusionPreventionSystem() {

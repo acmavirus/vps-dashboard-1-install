@@ -116,20 +116,26 @@ func registerSystemRoutes(api *gin.RouterGroup) {
 
 	// --- Settings API Endpoints ---
 	api.GET("/settings", func(c *gin.Context) {
+		tokenVal := getSetting("telegram_bot_token", os.Getenv("TELEGRAM_BOT_TOKEN"))
+		chatIDVal := getSetting("telegram_chat_id", os.Getenv("TELEGRAM_CHAT_ID"))
 		c.JSON(200, gin.H{
-			"username":   adminUser,
-			"version":    Version,
-			"go_version": runtime.Version(),
-			"os":         runtime.GOOS + "/" + runtime.GOARCH,
-			"num_cpu":    runtime.NumCPU(),
-			"goroutines": runtime.NumGoroutine(),
+			"username":           adminUser,
+			"version":            Version,
+			"go_version":         runtime.Version(),
+			"os":                 runtime.GOOS + "/" + runtime.GOARCH,
+			"num_cpu":            runtime.NumCPU(),
+			"goroutines":         runtime.NumGoroutine(),
+			"telegram_bot_token": tokenVal,
+			"telegram_chat_id":   chatIDVal,
 		})
 	})
 
 	api.POST("/settings/update", func(c *gin.Context) {
 		var req struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
+			Username         string `json:"username"`
+			Password         string `json:"password"`
+			TelegramBotToken string `json:"telegram_bot_token"`
+			TelegramChatID   string `json:"telegram_chat_id"`
 		}
 		if err := c.BindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": "Invalid request"})
@@ -153,6 +159,8 @@ func registerSystemRoutes(api *gin.RouterGroup) {
 
 		_ = saveSetting("admin_user", adminUser)
 		_ = saveSetting("admin_pass", adminPass)
+		_ = saveSetting("telegram_bot_token", req.TelegramBotToken)
+		_ = saveSetting("telegram_chat_id", req.TelegramChatID)
 
 		if err := saveSettingsToEnv(adminUser, adminPass); err != nil {
 			c.JSON(500, gin.H{"error": "Failed to save settings: " + err.Error()})
@@ -224,7 +232,10 @@ func saveSettingsToEnv(username, password string) error {
 
 func getStats() SystemStats {
 	vm, _ := mem.VirtualMemory()
-	cpuPercent, _ := cpu.Percent(0, false)
+	var cpuVal float64
+	if cpuPercent, err := cpu.Percent(100*time.Millisecond, false); err == nil && len(cpuPercent) > 0 {
+		cpuVal = cpuPercent[0]
+	}
 	d, _ := disk.Usage("/")
 	h, _ := host.Info()
 	n, _ := net.IOCounters(false)
@@ -253,8 +264,13 @@ func getStats() SystemStats {
 		diskWrite += io.WriteBytes
 	}
 
+	spamAlertsMutex.RLock()
+	alertsCopy := make([]SpamAlert, len(ActiveSpamAlerts))
+	copy(alertsCopy, ActiveSpamAlerts)
+	spamAlertsMutex.RUnlock()
+
 	stats := SystemStats{
-		CPU:         cpuPercent[0],
+		CPU:         cpuVal,
 		RAM:         vm.UsedPercent,
 		RAMTotal:    vm.Total,
 		RAMUsed:     vm.Used,
@@ -281,6 +297,7 @@ func getStats() SystemStats {
 		CPUModel:    cachedCPUModel,
 		DiskRead:    diskRead,
 		DiskWrite:   diskWrite,
+		SpamAlerts:  alertsCopy,
 	}
 
 	if stats.CPU > 90.0 && time.Since(lastCpuAlert) > 5*time.Minute {

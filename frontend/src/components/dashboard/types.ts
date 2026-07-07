@@ -24,6 +24,15 @@ export interface Stats {
   cpu_model: string
   disk_read: number
   disk_write: number
+  spam_alerts?: SpamAlert[]
+}
+
+export interface SpamAlert {
+  domain: string
+  request_count: number
+  unique_ips: number
+  detected_at: string
+  severity: string
 }
 
 export interface LogData {
@@ -81,6 +90,7 @@ export interface DomainInfo {
   ssl_issuer?: string
   ssl_expiry?: string
   ssl_days?: number
+  requests?: number
 }
 
 export interface DomainDeleteState {

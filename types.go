@@ -3,33 +3,42 @@ package main
 import "time"
 
 type SystemStats struct {
-	CPU         float64 `json:"cpu"`
-	RAM         float64 `json:"ram"`
-	RAMTotal    uint64  `json:"ram_total"`
-	RAMUsed     uint64  `json:"ram_used"`
-	SwapTotal   uint64  `json:"swap_total"`
-	SwapUsed    uint64  `json:"swap_used"`
-	SwapPercent float64 `json:"swap_percent"`
-	Disk        float64 `json:"disk"`
-	DiskTotal   uint64  `json:"disk_total"`
-	DiskUsed    uint64  `json:"disk_used"`
-	Uptime      uint64  `json:"uptime"`
-	Hostname    string  `json:"hostname"`
-	OS          string  `json:"os"`
-	Platform    string  `json:"platform"`
-	Kernel      string  `json:"kernel"`
-	NetSent     uint64  `json:"net_sent"`
-	NetRecv     uint64  `json:"net_recv"`
-	Connections int     `json:"connections"`
-	Timestamp   int64   `json:"timestamp"`
-	Version     string  `json:"version"`
-	Load1       float64 `json:"load_1"`
-	Load5       float64 `json:"load_5"`
-	Load15      float64 `json:"load_15"`
-	CPUCores    int     `json:"cpu_cores"`
-	CPUModel    string  `json:"cpu_model"`
-	DiskRead    uint64  `json:"disk_read"`
-	DiskWrite   uint64  `json:"disk_write"`
+	CPU         float64     `json:"cpu"`
+	RAM         float64     `json:"ram"`
+	RAMTotal    uint64      `json:"ram_total"`
+	RAMUsed     uint64      `json:"ram_used"`
+	SwapTotal   uint64      `json:"swap_total"`
+	SwapUsed    uint64      `json:"swap_used"`
+	SwapPercent float64     `json:"swap_percent"`
+	Disk        float64     `json:"disk"`
+	DiskTotal   uint64      `json:"disk_total"`
+	DiskUsed    uint64      `json:"disk_used"`
+	Uptime      uint64      `json:"uptime"`
+	Hostname    string      `json:"hostname"`
+	OS          string      `json:"os"`
+	Platform    string      `json:"platform"`
+	Kernel      string      `json:"kernel"`
+	NetSent     uint64      `json:"net_sent"`
+	NetRecv     uint64      `json:"net_recv"`
+	Connections int         `json:"connections"`
+	Timestamp   int64       `json:"timestamp"`
+	Version     string      `json:"version"`
+	Load1       float64     `json:"load_1"`
+	Load5       float64     `json:"load_5"`
+	Load15      float64     `json:"load_15"`
+	CPUCores    int         `json:"cpu_cores"`
+	CPUModel    string      `json:"cpu_model"`
+	DiskRead    uint64      `json:"disk_read"`
+	DiskWrite   uint64      `json:"disk_write"`
+	SpamAlerts  []SpamAlert `json:"spam_alerts"`
+}
+
+type SpamAlert struct {
+	Domain       string    `json:"domain"`
+	RequestCount int       `json:"request_count"`
+	UniqueIPs    int       `json:"unique_ips"`
+	DetectedAt   time.Time `json:"detected_at"`
+	Severity     string    `json:"severity"` // "medium", "high", "critical"
 }
 
 type ProcessInfo struct {
@@ -58,6 +67,7 @@ type DomainInfo struct {
 	SSLIssuer   string    `json:"ssl_issuer"`
 	SSLExpiry   time.Time `json:"ssl_expiry"`
 	SSLDays     int       `json:"ssl_days"`
+	Requests    int64     `json:"requests"`
 }
 
 type SSLCertInfo struct {

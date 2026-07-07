@@ -15,7 +15,8 @@
     CheckCircle2,
     XCircle,
     Loader2,
-    X
+    X,
+    Send
   } from "lucide-svelte"
   import { toast } from "../../lib/toast"
 
@@ -38,8 +39,13 @@
     go_version: "",
     os: "",
     num_cpu: 0,
-    goroutines: 0
+    goroutines: 0,
+    telegram_bot_token: "",
+    telegram_chat_id: ""
   }
+
+  let telegramBotToken = ""
+  let telegramChatID = ""
 
   // 2FA state
   let twoFAEnabled = false
@@ -67,6 +73,8 @@
       if (response.ok) {
         sysInfo = await response.json()
         username = sysInfo.username
+        telegramBotToken = sysInfo.telegram_bot_token || ""
+        telegramChatID = sysInfo.telegram_chat_id || ""
       } else {
         const errData = await response.json().catch(() => ({}))
         error = errData.error || "Failed to load dashboard settings"
@@ -124,6 +132,8 @@
         body: JSON.stringify({
           username: username.trim(),
           password: newPassword || "",
+          telegram_bot_token: telegramBotToken.trim(),
+          telegram_chat_id: telegramChatID.trim(),
         }),
       })
       if (response.ok) {
@@ -384,6 +394,58 @@
             </div>
           </form>
         {/if}
+      </div>
+
+      <!-- Card: Telegram Bot Configuration -->
+      <div class="rounded-2xl border border-border bg-card p-6 space-y-4">
+        <div class="border-b border-border pb-3 flex items-center gap-2">
+          <Send size={16} class="text-primary" />
+          <h3 class="text-sm font-bold text-foreground">Telegram Bot Configuration</h3>
+        </div>
+
+        <p class="text-xs text-muted-foreground leading-relaxed">
+          Cấu hình Telegram Bot Token và Chat ID để quản trị VPS trực tiếp qua ứng dụng nhắn tin Telegram. Bạn có thể thay đổi bất cứ lúc nào mà không cần khởi động lại.
+        </p>
+
+        <form on:submit={handleUpdateSettings} class="space-y-4">
+          <!-- Bot Token -->
+          <div class="space-y-1.5">
+            <label class="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+              Telegram Bot Token
+              <span class="text-[10px] text-muted-foreground/60">(Nhận từ @BotFather)</span>
+            </label>
+            <input 
+              type="text" 
+              bind:value={telegramBotToken}
+              placeholder="Nhập token bot của bạn..."
+              class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+            />
+          </div>
+
+          <!-- Chat ID -->
+          <div class="space-y-1.5">
+            <label class="text-xs font-semibold text-muted-foreground flex items-center gap-1.5">
+              Admin Chat ID
+              <span class="text-[10px] text-muted-foreground/60">(ID tài khoản Telegram được quyền điều khiển)</span>
+            </label>
+            <input 
+              type="text" 
+              bind:value={telegramChatID}
+              placeholder="Nhập Chat ID của bạn..."
+              class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+            />
+          </div>
+
+          <div class="flex justify-end pt-2">
+            <button 
+              type="submit" 
+              disabled={saving}
+              class="rounded-lg bg-primary px-4 py-2.5 text-xs font-semibold text-primary-foreground shadow hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {saving ? "Saving Changes..." : "Save Telegram Configuration"}
+            </button>
+          </div>
+        </form>
       </div>
 
       <!-- Card: 2FA Authentication -->

@@ -139,6 +139,13 @@
     ...(stats && stats.disk_percent > 85 ? [{ id: "disk", type: "warning", title: "Disk Space Warning", desc: `Disk space used is at ${stats.disk_percent.toFixed(1)}%`, time: "Just now" }] : []),
     ...(containers.some(c => c.State === "exited") ? [{ id: "docker", type: "warning", title: "Container Exited", desc: "One or more Docker containers have exited", time: "1m ago" }] : []),
     ...(pm2.some(p => p.status !== "online") ? [{ id: "pm2", type: "error", title: "Node App Offline", desc: "One or more PM2 apps are offline", time: "2m ago" }] : []),
+    ...(stats && stats.spam_alerts && stats.spam_alerts.length > 0 ? stats.spam_alerts.map((alert, i) => ({
+      id: `spam-${alert.domain}-${i}`,
+      type: "error",
+      title: `Domain Spammed: ${alert.domain}`,
+      desc: `${alert.request_count} reqs (${alert.unique_ips} unique IPs) in 30s. Severity: ${alert.severity.toUpperCase()}.`,
+      time: "Active"
+    })) : []),
   ]
   
   let domainDelete: DomainDeleteState | null = null
@@ -1090,6 +1097,32 @@
 
       <!-- Main Layout Content Section -->
       <main class="flex-1 overflow-y-auto bg-secondary/15 p-6 space-y-6 relative">
+        {#if stats && stats.spam_alerts && stats.spam_alerts.length > 0}
+          <div class="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-rose-500 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm animate-pulse" transition:slide={{ duration: 200 }}>
+            <div class="flex items-start gap-3">
+              <ShieldAlert class="h-5 w-5 shrink-0 text-rose-500 mt-0.5" />
+              <div>
+                <h4 class="text-sm font-semibold">Security Alert: Distributed Spam Detected!</h4>
+                <div class="text-xs opacity-90 mt-1 space-y-1">
+                  {#each stats.spam_alerts as alert}
+                    <p>
+                      Domain <span class="font-mono font-bold underline bg-rose-500/10 px-1 py-0.5 rounded">{alert.domain}</span> is receiving heavy traffic: 
+                      <strong>{alert.request_count} requests</strong> from <strong>{alert.unique_ips} unique IPs</strong> in the last 30 seconds (Severity: <span class="uppercase font-bold">{alert.severity}</span>).
+                    </p>
+                  {/each}
+                </div>
+              </div>
+            </div>
+            <button 
+              type="button" 
+              class="self-start md:self-center shrink-0 rounded-lg bg-rose-500/20 px-3.5 py-1.5 text-xs font-semibold hover:bg-rose-500/30 transition-colors border border-rose-500/30"
+              on:click={() => appTab = "security"}
+            >
+              Configure Firewall
+            </button>
+          </div>
+        {/if}
+
         <!-- Active tab container -->
         <div>
           {#if appTab === "overview"}

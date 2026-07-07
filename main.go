@@ -150,6 +150,9 @@ func main() {
 	// Start background worker to record historical metrics (every 5 minutes)
 	go startHistoricalMetricsCollector()
 
+	// Start interactive Telegram Bot
+	go startTelegramBot()
+
 	// Cache CPU hardware specs at startup
 	if info, err := cpu.Info(); err == nil && len(info) > 0 {
 		cachedCPUModel = info[0].ModelName

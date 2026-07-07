@@ -191,8 +191,8 @@ func isPrivateOrLocalIP(ipStr string) bool {
 }
 
 func sendTelegram(message string) {
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
-	chatID := os.Getenv("TELEGRAM_CHAT_ID")
+	token := getSetting("telegram_bot_token", os.Getenv("TELEGRAM_BOT_TOKEN"))
+	chatID := getSetting("telegram_chat_id", os.Getenv("TELEGRAM_CHAT_ID"))
 	if token == "" || chatID == "" {
 		return
 	}

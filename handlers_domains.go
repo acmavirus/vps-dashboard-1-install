@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -188,201 +189,15 @@ func registerDomainRoutes(api *gin.RouterGroup) {
 			return
 		}
 
-		domain, err := sanitizeDomain(req.Domain)
+		msg, err := createDomainHelper(req.Domain, req.Type, req.PHPVersion, req.ProxyPass, req.CreateDB, req.SSL)
 		if err != nil {
-			c.JSON(400, gin.H{"error": "Invalid domain format"})
+			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-
-		paths := getDomainPaths()
-		availablePath := filepath.Join(paths.sitesAvailableDir, domain+".conf")
-		enabledPath := filepath.Join(paths.sitesEnabledDir, domain+".conf")
-
-		if fileExists(availablePath) || fileExists(enabledPath) {
-			c.JSON(400, gin.H{"error": "Website / Domain configuration already exists"})
-			return
-		}
-
-		var noteContent []string
-
-		if req.Type == "static" || req.Type == "php" {
-			webRoot := filepath.Join("/home", domain)
-			if runtime.GOOS == "windows" {
-				webRoot = filepath.Join(".", "logs", "www", domain)
-			}
-
-			if err := os.MkdirAll(webRoot, 0755); err != nil {
-				c.JSON(500, gin.H{"error": "Failed to create web root directory: " + err.Error()})
-				return
-			}
-
-			if req.Type == "static" {
-				indexPath := filepath.Join(webRoot, "index.html")
-				if !fileExists(indexPath) {
-					defaultHTML := fmt.Sprintf("<!DOCTYPE html><html><head><title>Welcome to %s</title></head><body style='font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0f172a; color: #f1f5f9;'><div><h1>%s has been successfully configured!</h1><p>Website is running under Static HTML mode.</p></div></body></html>", domain, domain)
-					_ = os.WriteFile(indexPath, []byte(defaultHTML), 0644)
-				}
-			} else if req.Type == "php" {
-				indexPath := filepath.Join(webRoot, "index.php")
-				if !fileExists(indexPath) {
-					defaultPHP := fmt.Sprintf("<?php\necho '<h1>Welcome to %s</h1>';\necho '<p>Website is running under PHP Mode (PHP Version: %s)</p>';\nphpinfo();", domain, req.PHPVersion)
-					_ = os.WriteFile(indexPath, []byte(defaultPHP), 0644)
-				}
-			}
-		}
-
-		// Handle Database Provisioning
-		var dbName, dbUser, dbPass string
-		if req.CreateDB {
-			prefix := strings.ReplaceAll(domain, ".", "_")
-			if len(prefix) > 10 {
-				prefix = prefix[:10]
-			}
-			var dbErr error
-			dbName, dbUser, dbPass, dbErr = provisionCMSDatabase(prefix)
-			if dbErr != nil {
-				c.JSON(500, gin.H{"error": "Database provisioning failed: " + dbErr.Error()})
-				return
-			}
-			noteContent = append(noteContent, fmt.Sprintf("Database: %s\nUser: %s\nPass: %s", dbName, dbUser, dbPass))
-		}
-
-		// Generate Nginx Configuration
-		var nginxConfig string
-		if req.Type == "static" {
-			webRoot := filepath.Join("/home", domain)
-			accLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_access.log"))
-			errLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_error.log"))
-			nginxConfig = fmt.Sprintf(`server {
-    listen 80;
-    server_name %s;
-    root %s;
-    index index.html index.htm;
-    client_max_body_size 100M;
-
-    access_log %s;
-    error_log %s;
-
-    location ~ /\.(env|git|ht|svn) {
-        deny all;
-    }
-
-    location / {
-        try_files $uri $uri/ =404;
-    }
-}
-`, domain, webRoot, accLogPath, errLogPath)
-		} else if req.Type == "php" {
-			webRoot := filepath.Join("/home", domain)
-			sockPath := "/run/php/php8.3-fpm.sock"
-			if req.PHPVersion == "7.4" {
-				sockPath = "/run/php/php7.4-fpm.sock"
-			}
-			accLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_access.log"))
-			errLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_error.log"))
-			nginxConfig = fmt.Sprintf(`server {
-    listen 80;
-    server_name %s;
-    root %s;
-    index index.php index.html index.htm;
-    client_max_body_size 100M;
-
-    access_log %s;
-    error_log %s;
-
-    location ~ /\.(env|git|ht|svn) {
-        deny all;
-    }
-
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
-    }
-
-    location ~ \.php$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:%s;
-    }
-}
-`, domain, webRoot, accLogPath, errLogPath, sockPath)
-		} else if req.Type == "proxy" {
-			accLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_access.log"))
-			errLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_error.log"))
-			nginxConfig = fmt.Sprintf(`server {
-    listen 80;
-    server_name %s;
-    client_max_body_size 100M;
-
-    access_log %s;
-    error_log %s;
-
-    location ~ /\.(env|git|ht|svn) {
-        deny all;
-    }
-
-    location / {
-        proxy_pass %s;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-`, domain, accLogPath, errLogPath, req.ProxyPass)
-		} else {
-			c.JSON(400, gin.H{"error": "Invalid website type"})
-			return
-		}
-
-		if err := os.MkdirAll(filepath.Dir(availablePath), 0755); err != nil {
-			c.JSON(500, gin.H{"error": "Failed to create nginx config directory: " + err.Error()})
-			return
-		}
-		if err := os.WriteFile(availablePath, []byte(nginxConfig), 0644); err != nil {
-			c.JSON(500, gin.H{"error": "Failed to write nginx available config: " + err.Error()})
-			return
-		}
-
-		if err := os.MkdirAll(filepath.Dir(enabledPath), 0755); err != nil {
-			c.JSON(500, gin.H{"error": "Failed to create nginx enabled directory: " + err.Error()})
-			return
-		}
-		_ = os.Remove(enabledPath)
-		if err := os.Symlink(availablePath, enabledPath); err != nil {
-			if runtime.GOOS != "windows" {
-				c.JSON(500, gin.H{"error": "Failed to symlink nginx configuration: " + err.Error()})
-				return
-			}
-		}
-
-		if len(noteContent) > 0 {
-			noteStr := strings.Join(noteContent, "\n")
-			_ = updateDomainNote(domain, noteStr)
-		}
-
-		accLogPath := filepath.Join(paths.nginxLogDir, domain+"_access.log")
-		errLogPath := filepath.Join(paths.nginxLogDir, domain+"_error.log")
-		ensureLogFileExists(accLogPath)
-		ensureLogFileExists(errLogPath)
-
-		if runtime.GOOS != "windows" {
-			if err := reloadNginx(); err != nil {
-				c.JSON(500, gin.H{"error": "Failed to reload Nginx: " + err.Error()})
-				return
-			}
-			if req.SSL {
-				runCertbot(domain)
-			}
-		}
-
-		clearDomainCache()
 
 		c.JSON(200, gin.H{
 			"status":  "ok",
-			"message": "Website created successfully",
+			"message": msg,
 		})
 	})
 
@@ -878,7 +693,64 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 	return result, nil
 }
 
+type logCountCacheItem struct {
+	size    int64
+	count   int64
+	modTime time.Time
+}
+
+var (
+	logCountCache      = make(map[string]logCountCacheItem)
+	logCountCacheMutex sync.Mutex
+)
+
+func countLogRequests(path string) int64 {
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+
+	logCountCacheMutex.Lock()
+	cached, exists := logCountCache[path]
+	logCountCacheMutex.Unlock()
+
+	if exists && cached.size == fileInfo.Size() && cached.modTime.Equal(fileInfo.ModTime()) {
+		return cached.count
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+
+	var count int64 = 0
+	buf := make([]byte, 32*1024)
+	for {
+		c, err := file.Read(buf)
+		if err != nil {
+			break
+		}
+		for i := 0; i < c; i++ {
+			if buf[i] == '\n' {
+				count++
+			}
+		}
+	}
+
+	logCountCacheMutex.Lock()
+	logCountCache[path] = logCountCacheItem{
+		size:    fileInfo.Size(),
+		count:   count,
+		modTime: fileInfo.ModTime(),
+	}
+	logCountCacheMutex.Unlock()
+
+	return count
+}
+
 func getDomains(scan bool) []DomainInfo {
+	paths := getDomainPaths()
 	certs := getSSLCertificates()
 	certMap := make(map[string]SSLCertInfo)
 	for _, c := range certs {
@@ -891,6 +763,9 @@ func getDomains(scan bool) []DomainInfo {
 			cachedDomains[i].Note = getDomainNoteSQL(d.Domain)
 			cachedDomains[i].IsStarred = getDomainStarredSQL(d.Domain)
 			
+			accessLogPath := filepath.Join(paths.nginxLogDir, d.Domain+"_access.log")
+			cachedDomains[i].Requests = countLogRequests(accessLogPath)
+
 			if c, found := certMap[strings.ToLower(d.Domain)]; found {
 				cachedDomains[i].SSLActive = true
 				cachedDomains[i].SSLIssuer = c.Issuer
@@ -906,7 +781,6 @@ func getDomains(scan bool) []DomainInfo {
 		return cachedDomains
 	}
 
-	paths := getDomainPaths()
 	sitesEnabledDir := paths.sitesEnabledDir
 
 	if runtime.GOOS == "windows" {
@@ -967,16 +841,20 @@ func getDomains(scan bool) []DomainInfo {
 			sslDays = c.DaysLeft
 		}
 
+		accessLogPath := filepath.Join(paths.nginxLogDir, domain+"_access.log")
+		requests := countLogRequests(accessLogPath)
+
 		list = append(list, DomainInfo{
 			Domain:      domain,
 			Status:      status,
-			Code:      code,
+			Code:        code,
 			Note:        getDomainNoteSQL(domain),
 			IsStarred:   getDomainStarredSQL(domain),
 			SSLActive:   sslActive,
 			SSLIssuer:   sslIssuer,
 			SSLExpiry:   sslExpiry,
 			SSLDays:     sslDays,
+			Requests:    requests,
 		})
 	}
 
@@ -1069,4 +947,194 @@ func getSSLCertificates() []SSLCertInfo {
 		})
 	}
 	return list
+}
+
+func createDomainHelper(domain, domainType, phpVersion, proxyPass string, createDB, ssl bool) (string, error) {
+	domain, err := sanitizeDomain(domain)
+	if err != nil {
+		return "", fmt.Errorf("invalid domain format")
+	}
+
+	paths := getDomainPaths()
+	availablePath := filepath.Join(paths.sitesAvailableDir, domain+".conf")
+	enabledPath := filepath.Join(paths.sitesEnabledDir, domain+".conf")
+
+	if fileExists(availablePath) || fileExists(enabledPath) {
+		return "", fmt.Errorf("website / domain configuration already exists")
+	}
+
+	var noteContent []string
+
+	if domainType == "static" || domainType == "php" {
+		webRoot := filepath.Join("/home", domain)
+		if runtime.GOOS == "windows" {
+			webRoot = filepath.Join(".", "logs", "www", domain)
+		}
+
+		if err := os.MkdirAll(webRoot, 0755); err != nil {
+			return "", fmt.Errorf("failed to create web root directory: %w", err)
+		}
+
+		if domainType == "static" {
+			indexPath := filepath.Join(webRoot, "index.html")
+			if !fileExists(indexPath) {
+				defaultHTML := fmt.Sprintf("<!DOCTYPE html><html><head><title>Welcome to %s</title></head><body style='font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0f172a; color: #f1f5f9;'><div><h1>%s has been successfully configured!</h1><p>Website is running under Static HTML mode.</p></div></body></html>", domain, domain)
+				_ = os.WriteFile(indexPath, []byte(defaultHTML), 0644)
+			}
+		} else if domainType == "php" {
+			indexPath := filepath.Join(webRoot, "index.php")
+			if !fileExists(indexPath) {
+				defaultPHP := fmt.Sprintf("<?php\necho '<h1>Welcome to %s</h1>';\necho '<p>Website is running under PHP Mode (PHP Version: %s)</p>';\nphpinfo();", domain, phpVersion)
+				_ = os.WriteFile(indexPath, []byte(defaultPHP), 0644)
+			}
+		}
+	}
+
+	// Handle Database Provisioning
+	var dbName, dbUser, dbPass string
+	if createDB {
+		prefix := strings.ReplaceAll(domain, ".", "_")
+		if len(prefix) > 10 {
+			prefix = prefix[:10]
+		}
+		var dbErr error
+		dbName, dbUser, dbPass, dbErr = provisionCMSDatabase(prefix)
+		if dbErr != nil {
+			return "", fmt.Errorf("database provisioning failed: %w", dbErr)
+		}
+		noteContent = append(noteContent, fmt.Sprintf("Database: %s\nUser: %s\nPass: %s", dbName, dbUser, dbPass))
+	}
+
+	// Generate Nginx Configuration
+	var nginxConfig string
+	if domainType == "static" {
+		webRoot := filepath.Join("/home", domain)
+		accLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_access.log"))
+		errLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_error.log"))
+		nginxConfig = fmt.Sprintf(`server {
+    listen 80;
+    server_name %s;
+    root %s;
+    index index.html index.htm;
+    client_max_body_size 100M;
+
+    access_log %s;
+    error_log %s;
+
+    location ~ /\.(env|git|ht|svn) {
+        deny all;
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+`, domain, webRoot, accLogPath, errLogPath)
+	} else if domainType == "php" {
+		webRoot := filepath.Join("/home", domain)
+		sockPath := "/run/php/php8.3-fpm.sock"
+		if phpVersion == "7.4" {
+			sockPath = "/run/php/php7.4-fpm.sock"
+		}
+		accLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_access.log"))
+		errLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_error.log"))
+		nginxConfig = fmt.Sprintf(`server {
+    listen 80;
+    server_name %s;
+    root %s;
+    index index.php index.html index.htm;
+    client_max_body_size 100M;
+
+    access_log %s;
+    error_log %s;
+
+    location ~ /\.(env|git|ht|svn) {
+        deny all;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:%s;
+    }
+}
+`, domain, webRoot, accLogPath, errLogPath, sockPath)
+	} else if domainType == "proxy" {
+		accLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_access.log"))
+		errLogPath := filepath.ToSlash(filepath.Join(paths.nginxLogDir, domain+"_error.log"))
+		nginxConfig = fmt.Sprintf(`server {
+    listen 80;
+    server_name %s;
+    client_max_body_size 100M;
+
+    access_log %s;
+    error_log %s;
+
+    location ~ /\.(env|git|ht|svn) {
+        deny all;
+    }
+
+    location / {
+        proxy_pass %s;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+`, domain, accLogPath, errLogPath, proxyPass)
+	} else {
+		return "", fmt.Errorf("invalid website type")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(availablePath), 0755); err != nil {
+		return "", fmt.Errorf("failed to create nginx config directory: %w", err)
+	}
+	if err := os.WriteFile(availablePath, []byte(nginxConfig), 0644); err != nil {
+		return "", fmt.Errorf("failed to write nginx available config: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(enabledPath), 0755); err != nil {
+		return "", fmt.Errorf("failed to create nginx enabled directory: %w", err)
+	}
+	_ = os.Remove(enabledPath)
+	if err := os.Symlink(availablePath, enabledPath); err != nil {
+		if runtime.GOOS != "windows" {
+			return "", fmt.Errorf("failed to symlink nginx configuration: %w", err)
+		}
+	}
+
+	if len(noteContent) > 0 {
+		noteStr := strings.Join(noteContent, "\n")
+		_ = updateDomainNote(domain, noteStr)
+	}
+
+	accLogPath := filepath.Join(paths.nginxLogDir, domain+"_access.log")
+	errLogPath := filepath.Join(paths.nginxLogDir, domain+"_error.log")
+	ensureLogFileExists(accLogPath)
+	ensureLogFileExists(errLogPath)
+
+	var successMessage = "Website created successfully"
+	if len(noteContent) > 0 {
+		successMessage += "\n" + strings.Join(noteContent, "\n")
+	}
+
+	if runtime.GOOS != "windows" {
+		if err := reloadNginx(); err != nil {
+			return "", fmt.Errorf("failed to reload Nginx: %w", err)
+		}
+		if ssl {
+			runCertbot(domain)
+		}
+	}
+
+	clearDomainCache()
+	return successMessage, nil
 }

@@ -162,6 +162,52 @@
       createLoading = false
     }
   }
+
+  let sortField: 'domain' | 'note' | 'status' | 'code' | 'requests' | 'ssl_days' | '' = ""
+  let sortAsc = true
+
+  function toggleSort(field: typeof sortField) {
+    if (sortField === field) {
+      sortAsc = !sortAsc
+    } else {
+      sortField = field
+      sortAsc = true
+    }
+  }
+
+  $: sortedDomains = (() => {
+    if (!sortField) {
+      return domains
+    }
+    return [...domains].sort((a, b) => {
+      let valA: any = ""
+      let valB: any = ""
+
+      if (sortField === 'domain') {
+        valA = a.domain.toLowerCase()
+        valB = b.domain.toLowerCase()
+      } else if (sortField === 'note') {
+        valA = (a.note || "").toLowerCase()
+        valB = (b.note || "").toLowerCase()
+      } else if (sortField === 'status') {
+        valA = a.status.toLowerCase()
+        valB = b.status.toLowerCase()
+      } else if (sortField === 'code') {
+        valA = a.code || 0
+        valB = b.code || 0
+      } else if (sortField === 'requests') {
+        valA = a.requests || 0
+        valB = b.requests || 0
+      } else if (sortField === 'ssl_days') {
+        valA = a.ssl_active ? a.ssl_days : -1
+        valB = b.ssl_active ? b.ssl_days : -1
+      }
+
+      if (valA < valB) return sortAsc ? -1 : 1
+      if (valA > valB) return sortAsc ? 1 : -1
+      return 0
+    })
+  })()
 </script>
 
 <div class="space-y-4">
@@ -196,25 +242,68 @@
   <div class="rounded-xl border border-border bg-card overflow-hidden shadow-sm">
     <div class="overflow-x-auto">
       <table class="w-full text-left text-xs font-light">
-        <thead class="border-b border-border bg-secondary/30 text-muted-foreground">
+        <thead class="border-b border-border bg-secondary/30 text-muted-foreground select-none">
           <tr>
-            <th class="px-6 py-3 font-medium">Domain</th>
-            <th class="px-6 py-3 font-medium">Note / Database Info</th>
-            <th class="px-6 py-3 font-medium">Status</th>
-            <th class="px-6 py-3 font-medium">HTTP Code</th>
-            <th class="px-6 py-3 font-medium">SSL</th>
+            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('domain')}>
+              <div class="flex items-center gap-1">
+                <span>Domain</span>
+                {#if sortField === 'domain'}
+                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
+                {/if}
+              </div>
+            </th>
+            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('note')}>
+              <div class="flex items-center gap-1">
+                <span>Note / Database Info</span>
+                {#if sortField === 'note'}
+                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
+                {/if}
+              </div>
+            </th>
+            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('status')}>
+              <div class="flex items-center gap-1">
+                <span>Status</span>
+                {#if sortField === 'status'}
+                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
+                {/if}
+              </div>
+            </th>
+            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('code')}>
+              <div class="flex items-center gap-1">
+                <span>HTTP Code</span>
+                {#if sortField === 'code'}
+                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
+                {/if}
+              </div>
+            </th>
+            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('requests')}>
+              <div class="flex items-center gap-1">
+                <span>Requests</span>
+                {#if sortField === 'requests'}
+                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
+                {/if}
+              </div>
+            </th>
+            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('ssl_days')}>
+              <div class="flex items-center gap-1">
+                <span>SSL</span>
+                {#if sortField === 'ssl_days'}
+                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
+                {/if}
+              </div>
+            </th>
             <th class="px-6 py-3 font-medium text-right">Action</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-border">
           {#if domains.length === 0}
             <tr>
-              <td colspan="6" class="px-6 py-10 text-center text-muted-foreground font-light">
+              <td colspan="7" class="px-6 py-10 text-center text-muted-foreground font-light">
                 Chưa có website nào được thêm. Bấm "Thêm Website" để bắt đầu.
               </td>
             </tr>
           {/if}
-          {#each domains as domain, index (`${domain.domain}-${index}`)}
+          {#each sortedDomains as domain, index (`${domain.domain}-${index}`)}
             <tr class="hover:bg-secondary/10">
               <td class="px-6 py-4 font-normal">
                 <div class="flex items-center gap-2">
@@ -255,6 +344,9 @@
                 <span class={domain.code >= 200 && domain.code < 400 ? "text-emerald-400 font-medium" : "text-rose-400 font-medium"}>
                   {domain.code || "--"}
                 </span>
+              </td>
+              <td class="px-6 py-4 tabular-nums text-muted-foreground font-mono">
+                {domain.requests !== undefined ? domain.requests.toLocaleString() : "--"}
               </td>
               <td class="px-6 py-4">
                 {#if domain.ssl_active}
