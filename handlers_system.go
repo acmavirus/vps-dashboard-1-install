@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -152,6 +153,13 @@ func registerSystemRoutes(api *gin.RouterGroup) {
 			return
 		}
 
+		if req.TelegramChatID != "" {
+			if _, err := strconv.ParseInt(req.TelegramChatID, 10, 64); err != nil {
+				c.JSON(400, gin.H{"error": "Telegram Admin Chat ID phải là số nguyên hợp lệ"})
+				return
+			}
+		}
+
 		adminUser = req.Username
 		if req.Password != "" {
 			adminPass = req.Password
@@ -162,7 +170,7 @@ func registerSystemRoutes(api *gin.RouterGroup) {
 		_ = saveSetting("telegram_bot_token", req.TelegramBotToken)
 		_ = saveSetting("telegram_chat_id", req.TelegramChatID)
 
-		if err := saveSettingsToEnv(adminUser, adminPass); err != nil {
+		if err := saveSettingsToEnv(adminUser, adminPass, req.TelegramBotToken, req.TelegramChatID); err != nil {
 			c.JSON(500, gin.H{"error": "Failed to save settings: " + err.Error()})
 			return
 		}
@@ -203,7 +211,7 @@ func registerSystemRoutes(api *gin.RouterGroup) {
 	})
 }
 
-func saveSettingsToEnv(username, password string) error {
+func saveSettingsToEnv(username, password, telegramToken, telegramChatID string) error {
 	var lines []string
 	if data, err := os.ReadFile(".env"); err == nil {
 		oldLines := strings.Split(string(data), "\n")
@@ -215,7 +223,7 @@ func saveSettingsToEnv(username, password string) error {
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {
 				key := strings.TrimSpace(parts[0])
-				if key == "ADMIN_USER" || key == "ADMIN_PASS" || key == "AUTH_TOKEN" {
+				if key == "ADMIN_USER" || key == "ADMIN_PASS" || key == "AUTH_TOKEN" || key == "TELEGRAM_BOT_TOKEN" || key == "TELEGRAM_CHAT_ID" {
 					continue
 				}
 				lines = append(lines, line)
@@ -226,6 +234,12 @@ func saveSettingsToEnv(username, password string) error {
 	lines = append(lines, fmt.Sprintf("ADMIN_USER=%s", username))
 	lines = append(lines, fmt.Sprintf("ADMIN_PASS=%s", password))
 	lines = append(lines, fmt.Sprintf("AUTH_TOKEN=%s", authToken))
+	if telegramToken != "" {
+		lines = append(lines, fmt.Sprintf("TELEGRAM_BOT_TOKEN=%s", telegramToken))
+	}
+	if telegramChatID != "" {
+		lines = append(lines, fmt.Sprintf("TELEGRAM_CHAT_ID=%s", telegramChatID))
+	}
 
 	return os.WriteFile(".env", []byte(strings.Join(lines, "\n")), 0600)
 }

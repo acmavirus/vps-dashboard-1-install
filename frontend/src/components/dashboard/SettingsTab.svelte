@@ -431,9 +431,12 @@
             <input 
               type="text" 
               bind:value={telegramChatID}
-              placeholder="Nhập Chat ID của bạn..."
+              placeholder="Nhập Chat ID của bạn (VD: 123456789)..."
               class="w-full rounded-lg border border-border bg-secondary/20 px-3.5 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
             />
+            <p class="text-[11px] text-muted-foreground/70 leading-normal">
+              💡 <em>Cách lấy Chat ID:</em> Gửi tin nhắn bất kỳ đến Telegram bot <code class="bg-secondary px-1 py-0.5 rounded text-[10px]">@userinfobot</code> hoặc gõ <code class="bg-secondary px-1 py-0.5 rounded text-[10px]">/start</code> trên bot của bạn. Sau khi điền Chat ID và bấm lưu, gõ <code class="bg-secondary px-1 py-0.5 rounded text-[10px]">/start</code> trên Telegram để mở bảng điều khiển VPS.
+            </p>
           </div>
 
           <div class="flex justify-end pt-2">

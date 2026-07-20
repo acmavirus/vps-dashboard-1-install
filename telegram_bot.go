@@ -166,8 +166,10 @@ func handleTelegramMessage(msg TelegramMessage) {
 			"Bot quản trị VPS an toàn và bảo mật cao. Bạn có thể sử dụng các phím tắt nhanh bên dưới hoặc gõ lệnh trực tiếp.\n\n" +
 			"📋 *Danh sách câu lệnh khả dụng:*\n" +
 			"📊 /status - Xem tài nguyên VPS hiện tại\n" +
+			"⚡ /top - Top 5 tiến trình ngốn CPU/RAM\n" +
 			"🌐 /domains - Trạng thái website & SSL\n" +
 			"🐳 /docker - Quản lý Docker containers\n" +
+			"📜 `/docker_logs <name>` - Xem log Docker container (50 dòng)\n" +
 			"⚙️ /services - Quản lý dịch vụ hệ thống\n" +
 			"🛡️ /fw - Trạng thái tường lửa UFW\n" +
 			"⚠️ /alerts - Bật/tắt cảnh báo quá tải\n" +
@@ -188,6 +190,9 @@ func handleTelegramMessage(msg TelegramMessage) {
 				{
 					{Text: "🛡️ Firewall"},
 					{Text: "⚙️ Services"},
+					{Text: "⚡ Top Proc"},
+				},
+				{
 					{Text: "💡 Help"},
 				},
 			},
@@ -201,6 +206,11 @@ func handleTelegramMessage(msg TelegramMessage) {
 		statusText := getTelegramStatusText()
 		sendTelegramMessage(chatID, statusText, nil)
 
+	case text == "/top" || text == "⚡ Top Proc":
+		sendTelegramMessage(chatID, "⏳ Đang quét danh sách tiến trình...", nil)
+		topText := getTelegramTopProcessesText()
+		sendTelegramMessage(chatID, topText, nil)
+
 	case text == "/domains" || text == "🌐 Domains":
 		sendTelegramMessage(chatID, "⏳ Đang quét trạng thái các website...", nil)
 		domainsText := getTelegramDomainsText()
@@ -210,6 +220,12 @@ func handleTelegramMessage(msg TelegramMessage) {
 		sendTelegramMessage(chatID, "⏳ Đang truy vấn Docker daemon...", nil)
 		dockerText, markup := getTelegramDockerText()
 		sendTelegramMessage(chatID, dockerText, markup)
+
+	case strings.HasPrefix(text, "/docker_logs "):
+		containerName := strings.TrimSpace(strings.TrimPrefix(text, "/docker_logs "))
+		sendTelegramMessage(chatID, fmt.Sprintf("⏳ Đang truy vấn log của container *%s*...", containerName), nil)
+		logsText := getTelegramDockerLogsText(containerName)
+		sendTelegramMessage(chatID, logsText, nil)
 
 	case text == "/services" || text == "⚙️ Services":
 		sendTelegramMessage(chatID, "⏳ Đang kiểm tra trạng thái dịch vụ...", nil)
@@ -345,6 +361,13 @@ func handleTelegramCallback(cb TelegramCallbackQuery) {
 			return
 		}
 
+		if action == "logs" {
+			answerCallbackQuery(cb.ID, "Đang tải log của "+target)
+			logText := getTelegramDockerLogsText(target)
+			sendTelegramMessage(chatID, logText, nil)
+			return
+		}
+
 		var cmd *exec.Cmd
 		if action == "restart" {
 			answerCallbackQuery(cb.ID, "Đang khởi động lại container "+target)
@@ -451,6 +474,58 @@ func handleTelegramCallback(cb TelegramCallbackQuery) {
 }
 
 // --- Report Generators ---
+
+func getTelegramTopProcessesText() string {
+	procs := getTopProcesses()
+	if len(procs) == 0 {
+		return "⚡ *TOP TIẾN TRÌNH (CPU/RAM)*\n\nKhông có tiến trình nào đang chiếm quá nhiều tài nguyên."
+	}
+	var sb strings.Builder
+	sb.WriteString("⚡ *TOP TIẾN TRÌNH CAO NHẤT (CPU/RAM)*\n\n")
+	limit := 5
+	if len(procs) < limit {
+		limit = len(procs)
+	}
+	for i := 0; i < limit; i++ {
+		p := procs[i]
+		sb.WriteString(fmt.Sprintf("%d. *%s* (PID: `%d`)\n   • CPU: `%.1f%%` | RAM: `%.1f%%`\n", i+1, p.Name, p.PID, p.CPU, p.Memory))
+	}
+	return sb.String()
+}
+
+func getTelegramDockerLogsText(containerName string) string {
+	idPattern := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	if !idPattern.MatchString(containerName) {
+		return "⚠️ *Lỗi:* Tên container không hợp lệ."
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("🐳 *LOGS CONTAINER %s (Mô phỏng Windows):*\n```\n[Log output simulation for container %s]\n```", containerName, containerName)
+	} else {
+		cmd = exec.Command("docker", "logs", "--tail", "50", containerName)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("❌ *Lỗi khi đọc log container %s:* %s", containerName, err.Error())
+	}
+
+	outText := string(output)
+	if strings.TrimSpace(outText) == "" {
+		return fmt.Sprintf("ℹ️ Container *%s* không có log mới.", containerName)
+	}
+
+	if len(outText) > 3500 {
+		outText = outText[len(outText)-3500:]
+	}
+
+	return fmt.Sprintf("🐳 *LOGS RECENT CONTAINER (%s):*\n```\n%s\n```", containerName, outText)
+}
 
 func getTelegramStatusText() string {
 	stats := getStats()
@@ -560,10 +635,12 @@ func getTelegramDockerText() (string, TelegramInlineKeyboardMarkup) {
 			buttons = append(buttons, []TelegramInlineKeyboardButton{
 				{Text: "🔄 Restart " + c.Name, CallbackData: "docker:restart:" + c.Name},
 				{Text: "🛑 Stop " + c.Name, CallbackData: "docker:stop:" + c.Name},
+				{Text: "📜 Logs " + c.Name, CallbackData: "docker:logs:" + c.Name},
 			})
 		} else {
 			buttons = append(buttons, []TelegramInlineKeyboardButton{
 				{Text: "▶️ Start " + c.Name, CallbackData: "docker:start:" + c.Name},
+				{Text: "📜 Logs " + c.Name, CallbackData: "docker:logs:" + c.Name},
 			})
 		}
 	}
