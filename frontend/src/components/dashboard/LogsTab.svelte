@@ -123,9 +123,16 @@
     <div class="flex-1 overflow-y-auto p-4 sm:p-5">
       <div class="whitespace-pre-wrap font-mono text-[12px] font-light leading-relaxed sm:text-[13px]">
         {#if currentLog}
-          {#each lines as item, idx (`line-${idx}`)}
-            <div class={item.color}>{item.line}</div>
-          {/each}
+          {#if lines.length > 0}
+            {#each lines as item, idx (`line-${idx}`)}
+              <div class={item.color}>{item.line}</div>
+            {/each}
+          {:else}
+            <div class="py-16 text-center text-xs text-muted-foreground font-sans">
+              <p class="font-medium text-foreground/80 text-sm">Tệp log này hiện đang trống</p>
+              <p class="text-[11px] mt-1 text-muted-foreground/60">Không có lỗi hoặc sự kiện nào được ghi nhận trong tệp log này.</p>
+            </div>
+          {/if}
         {:else}
           <div class="text-muted-foreground">Waiting for data...</div>
         {/if}
