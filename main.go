@@ -153,8 +153,7 @@ func ensureDefaultNginxPage() {
 	_ = os.MkdirAll(sslDir, 0755)
 
 	htmlPath := filepath.Join(defaultHtmlDir, "index.html")
-	if _, err := os.Stat(htmlPath); os.IsNotExist(err) {
-		defaultHtmlContent := `<!DOCTYPE html>
+	defaultHtmlContent := `<!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
@@ -207,8 +206,7 @@ func ensureDefaultNginxPage() {
     </div>
 </body>
 </html>`
-		_ = os.WriteFile(htmlPath, []byte(defaultHtmlContent), 0644)
-	}
+	_ = os.WriteFile(htmlPath, []byte(defaultHtmlContent), 0644)
 
 	certPath := filepath.Join(sslDir, "default.crt")
 	keyPath := filepath.Join(sslDir, "default.key")
@@ -231,7 +229,7 @@ func ensureDefaultNginxPage() {
 	existingContent, _ := os.ReadFile(configPath)
 	contentStr := string(existingContent)
 
-	if contentStr == "" || !strings.Contains(contentStr, "listen 443") {
+	if contentStr == "" || !strings.Contains(contentStr, "listen 443") || !strings.Contains(contentStr, "charset utf-8") {
 		rootPath := filepath.ToSlash(defaultHtmlDir)
 		certPathStr := filepath.ToSlash(certPath)
 		keyPathStr := filepath.ToSlash(keyPath)
@@ -241,6 +239,7 @@ func ensureDefaultNginxPage() {
     listen 80 default_server;
 
     server_name _;
+    charset utf-8;
 
     root %s;
     index index.html;
@@ -256,6 +255,7 @@ func ensureDefaultNginxPage() {
     listen [::]:80 default_server;
 
     server_name _;
+    charset utf-8;
 
     root %s;
     index index.html;
@@ -273,6 +273,7 @@ server {
     listen [::]:443 ssl default_server;
 
     server_name _;
+    charset utf-8;
 
     ssl_certificate %s;
     ssl_certificate_key %s;

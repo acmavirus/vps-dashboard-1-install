@@ -188,6 +188,7 @@ server {
     listen [::]:80 default_server;
 
     server_name _;
+    charset utf-8;
 
     root /var/www/default;
     index index.html;
@@ -205,6 +206,7 @@ server {
     listen [::]:443 ssl default_server;
 
     server_name _;
+    charset utf-8;
 
     ssl_certificate /etc/nginx/ssl/default.crt;
     ssl_certificate_key /etc/nginx/ssl/default.key;
