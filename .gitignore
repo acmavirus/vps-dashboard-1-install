@@ -1,17 +1,52 @@
-# Binaries
+# Binaries & Executables
 vps-dash*
+*.exe
+*.exe.stackdump
+*.exe.manifest
+*.dll
+*.so
+*.dylib
+*.test
+*.out
 
-# Node.js
-frontend/node_modules
-frontend/dist
+# Database & Runtime Data
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs & Temporary Test Dirs
+logs/
+*.log
+tmp/
+scratch/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node.js / Frontend Build
+frontend/node_modules/
+frontend/dist/
 .eslintcache
+.vite/
 
-# Environment
+# Environment Files & Secrets
 .env
 .env.local
-.agent
-# IDE
-.vscode
-.idea
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Agent / AI Configuration
+.agent/
+
+# IDE & OS Configs
+.vscode/
+.idea/
 *.swp
 *.swo
+*~
+.DS_Store
+Thumbs.db
