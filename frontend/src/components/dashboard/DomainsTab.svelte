@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RefreshCw, Trash2, Plus, X, Globe, Shield, ShieldCheck, ShieldAlert, Clock, Database, ArrowRight, Loader2, Star } from "lucide-svelte"
+  import { RefreshCw, Trash2, Plus, X, Globe, Shield, ShieldCheck, ShieldAlert, Clock, Database, ArrowRight, Loader2, Star, ChevronDown, ChevronRight, ExternalLink } from "lucide-svelte"
   import type { DomainInfo, DomainDeleteState, DomainNoteState } from "./types"
   import { toast } from "../../lib/toast"
   import ConfirmModal from "../ConfirmModal.svelte"
@@ -102,7 +102,7 @@
 
   let domainName = ""
   let websiteType = "php" // "static", "php", "proxy"
-  let phpVersion = "8.3" // "8.3", "7.4"
+  let phpVersion = "8.3"
   let proxyPass = "http://127.0.0.1:3000"
   let createDb = false
   let enableSSL = false
@@ -111,16 +111,12 @@
     e.preventDefault()
     createError = ""
     createSuccess = ""
-    
-    // Simple validation
     const domainClean = domainName.trim().toLowerCase()
     if (!domainClean) {
       createError = "Domain name cannot be empty"
       return
     }
-
     createLoading = true
-
     try {
       const response = await fetch("/api/domains/create", {
         method: "POST",
@@ -137,18 +133,13 @@
           ssl: enableSSL
         }),
       })
-
       const data = await response.json().catch(() => ({}))
-
       if (response.ok) {
         createSuccess = `Website ${domainClean} created successfully!`
-        // Clear form
         domainName = ""
         createDb = false
         enableSSL = false
-        // Refresh domains list
         onRefresh()
-        // Wait 1.5 seconds then close modal
         setTimeout(() => {
           showCreateModal = false
           createSuccess = ""
@@ -163,61 +154,100 @@
     }
   }
 
-  let sortField: 'domain' | 'note' | 'status' | 'code' | 'requests' | 'ssl_days' | '' = ""
-  let sortAsc = true
+  // ─── Domain Grouping Logic ───────────────────────────────────────────────────
 
-  function toggleSort(field: typeof sortField) {
-    if (sortField === field) {
-      sortAsc = !sortAsc
-    } else {
-      sortField = field
-      sortAsc = true
-    }
+  interface DomainGroup {
+    rootDomain: string
+    subdomains: DomainInfo[]
+    expanded: boolean
+    totalSSL: number
+    totalOnline: number
+    totalOffline: number
   }
 
-  $: sortedDomains = (() => {
-    if (!sortField) {
-      return domains
+  /**
+   * Extract the root domain (last 2 or 3 parts) from a FQDN.
+   * Examples:
+   *   "api.thuc.me"    → "thuc.me"
+   *   "thuc.me"        → "thuc.me"
+   *   "sub.igeara.com" → "igeara.com"
+   *   "a.b.co.uk"      → "b.co.uk"  (simple 2-part TLD heuristic)
+   */
+  function extractRootDomain(fqdn: string): string {
+    const parts = fqdn.split(".")
+    if (parts.length <= 2) return fqdn
+    // Check common 2-part TLDs (co.uk, com.vn, io.vn, etc.)
+    const twoPartTLDs = ["co.uk", "com.au", "com.vn", "net.vn", "io.vn", "org.vn", "edu.vn", "gov.vn"]
+    const lastTwo = parts.slice(-2).join(".")
+    if (twoPartTLDs.includes(lastTwo)) {
+      return parts.slice(-3).join(".")
     }
-    return [...domains].sort((a, b) => {
-      let valA: any = ""
-      let valB: any = ""
+    return parts.slice(-2).join(".")
+  }
 
-      if (sortField === 'domain') {
-        valA = a.domain.toLowerCase()
-        valB = b.domain.toLowerCase()
-      } else if (sortField === 'note') {
-        valA = (a.note || "").toLowerCase()
-        valB = (b.note || "").toLowerCase()
-      } else if (sortField === 'status') {
-        valA = a.status.toLowerCase()
-        valB = b.status.toLowerCase()
-      } else if (sortField === 'code') {
-        valA = a.code || 0
-        valB = b.code || 0
-      } else if (sortField === 'requests') {
-        valA = a.requests || 0
-        valB = b.requests || 0
-      } else if (sortField === 'ssl_days') {
-        valA = a.ssl_active ? a.ssl_days : -1
-        valB = b.ssl_active ? b.ssl_days : -1
+  // Track expanded state per group key
+  let expandedGroups: Set<string> = new Set()
+
+  function toggleGroup(rootDomain: string) {
+    if (expandedGroups.has(rootDomain)) {
+      expandedGroups.delete(rootDomain)
+    } else {
+      expandedGroups.add(rootDomain)
+    }
+    expandedGroups = expandedGroups // trigger reactivity
+  }
+
+  // Sort starred domains first, then by name
+  $: sortedDomains = [...domains].sort((a, b) => {
+    if (a.is_starred && !b.is_starred) return -1
+    if (!a.is_starred && b.is_starred) return 1
+    return a.domain.localeCompare(b.domain)
+  })
+
+  $: groupedDomains = (() => {
+    const map = new Map<string, DomainGroup>()
+
+    for (const d of sortedDomains) {
+      const root = extractRootDomain(d.domain)
+      if (!map.has(root)) {
+        map.set(root, {
+          rootDomain: root,
+          subdomains: [],
+          expanded: expandedGroups.has(root),
+          totalSSL: 0,
+          totalOnline: 0,
+          totalOffline: 0,
+        })
       }
+      const group = map.get(root)!
+      group.subdomains.push(d)
+      if (d.ssl_active) group.totalSSL++
+      if (d.status === "online") group.totalOnline++
+      else if (d.status === "offline") group.totalOffline++
+      group.expanded = expandedGroups.has(root)
+    }
 
-      if (valA < valB) return sortAsc ? -1 : 1
-      if (valA > valB) return sortAsc ? 1 : -1
-      return 0
+    // Sort groups: starred groups first, then alphabetically
+    return Array.from(map.values()).sort((a, b) => {
+      const aHasStar = a.subdomains.some(d => d.is_starred)
+      const bHasStar = b.subdomains.some(d => d.is_starred)
+      if (aHasStar && !bHasStar) return -1
+      if (!aHasStar && bHasStar) return 1
+      return a.rootDomain.localeCompare(b.rootDomain)
     })
   })()
 </script>
 
 <div class="space-y-4">
-  <!-- Table Header Controls -->
+  <!-- Header Controls -->
   <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
     <div>
       <h2 class="text-lg font-medium text-foreground">Quản lý Website</h2>
-      <p class="text-xs text-muted-foreground">Cấu hình Nginx, PHP, Reverse Proxy và SSL Let's Encrypt</p>
+      <p class="text-xs text-muted-foreground">
+        {domains.length} domain · {groupedDomains.length} root domain · Cấu hình Nginx, PHP, Reverse Proxy và SSL
+      </p>
     </div>
-    
+
     <div class="flex items-center gap-2 w-full sm:w-auto">
       <button
         on:click={onScan}
@@ -238,180 +268,201 @@
     </div>
   </div>
 
-  <!-- Website List Card -->
-  <div class="rounded-xl border border-border bg-card overflow-hidden shadow-sm">
-    <div class="overflow-x-auto">
-      <table class="w-full text-left text-xs font-light">
-        <thead class="border-b border-border bg-secondary/30 text-muted-foreground select-none">
-          <tr>
-            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('domain')}>
-              <div class="flex items-center gap-1">
-                <span>Domain</span>
-                {#if sortField === 'domain'}
-                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
-                {/if}
-              </div>
-            </th>
-            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('note')}>
-              <div class="flex items-center gap-1">
-                <span>Note / Database Info</span>
-                {#if sortField === 'note'}
-                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
-                {/if}
-              </div>
-            </th>
-            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('status')}>
-              <div class="flex items-center gap-1">
-                <span>Status</span>
-                {#if sortField === 'status'}
-                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
-                {/if}
-              </div>
-            </th>
-            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('code')}>
-              <div class="flex items-center gap-1">
-                <span>HTTP Code</span>
-                {#if sortField === 'code'}
-                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
-                {/if}
-              </div>
-            </th>
-            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('requests')}>
-              <div class="flex items-center gap-1">
-                <span>Requests</span>
-                {#if sortField === 'requests'}
-                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
-                {/if}
-              </div>
-            </th>
-            <th class="px-6 py-3 font-medium cursor-pointer hover:text-foreground transition-colors" on:click={() => toggleSort('ssl_days')}>
-              <div class="flex items-center gap-1">
-                <span>SSL</span>
-                {#if sortField === 'ssl_days'}
-                  <span class="text-[10px]">{sortAsc ? '▲' : '▼'}</span>
-                {/if}
-              </div>
-            </th>
-            <th class="px-6 py-3 font-medium text-right">Action</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-border">
-          {#if domains.length === 0}
-            <tr>
-              <td colspan="7" class="px-6 py-10 text-center text-muted-foreground font-light">
-                Chưa có website nào được thêm. Bấm "Thêm Website" để bắt đầu.
-              </td>
-            </tr>
-          {/if}
-          {#each sortedDomains as domain, index (`${domain.domain}-${index}`)}
-            <tr class="hover:bg-secondary/10">
-              <td class="px-6 py-4 font-normal">
-                <div class="flex items-center gap-2">
-                  <button
-                    type="button"
-                    on:click={() => onToggleStar(domain.domain, !!domain.is_starred)}
-                    class="focus:outline-none transition-transform hover:scale-110 active:scale-95 flex items-center justify-center"
-                    title={domain.is_starred ? "Bỏ nổi bật" : "Nổi bật sao vàng"}
-                  >
-                    {#if domain.is_starred}
-                      <Star size={14} class="text-amber-400 fill-amber-400" />
-                    {:else}
-                      <Star size={14} class="text-muted-foreground/35 hover:text-amber-400/80 transition-colors" />
-                    {/if}
-                  </button>
-                  <Globe size={14} class="text-muted-foreground" />
+  <!-- Domain Groups -->
+  {#if domains.length === 0}
+    <div class="rounded-xl border border-border bg-card px-6 py-12 text-center text-sm text-muted-foreground">
+      Chưa có website nào được thêm. Bấm "Thêm Website" để bắt đầu.
+    </div>
+  {:else}
+    <div class="space-y-2">
+      {#each groupedDomains as group (group.rootDomain)}
+        <div class="rounded-xl border border-border bg-card overflow-hidden shadow-sm transition-all">
+          <!-- Group Header (Root Domain Row) -->
+          <button
+            type="button"
+            on:click={() => toggleGroup(group.rootDomain)}
+            class="w-full flex items-center gap-3 px-4 py-3 hover:bg-secondary/20 transition-colors text-left select-none group"
+          >
+            <!-- Chevron -->
+            <span class="text-muted-foreground transition-transform duration-200 {group.expanded ? 'rotate-0' : '-rotate-90'}">
+              {#if group.expanded}
+                <ChevronDown size={16} />
+              {:else}
+                <ChevronRight size={16} />
+              {/if}
+            </span>
+
+            <!-- Root domain name -->
+            <Globe size={15} class="text-blue-400 shrink-0" />
+            <span class="font-semibold text-sm text-foreground font-sans flex-1 truncate">
+              {group.rootDomain}
+            </span>
+
+            <!-- Stats badges -->
+            <div class="flex items-center gap-2 shrink-0">
+              <!-- Domain count -->
+              <span class="text-xs text-muted-foreground bg-secondary/50 px-2 py-0.5 rounded-full">
+                {group.subdomains.length} site{group.subdomains.length > 1 ? 's' : ''}
+              </span>
+
+              <!-- Online indicator -->
+              {#if group.totalOnline > 0}
+                <span class="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                  <span class="h-1.5 w-1.5 rounded-full bg-emerald-500 inline-block"></span>
+                  {group.totalOnline}
+                </span>
+              {/if}
+
+              <!-- Offline indicator -->
+              {#if group.totalOffline > 0}
+                <span class="inline-flex items-center gap-1 text-[10px] text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded-full">
+                  <span class="h-1.5 w-1.5 rounded-full bg-rose-500 inline-block"></span>
+                  {group.totalOffline}
+                </span>
+              {/if}
+
+              <!-- SSL summary -->
+              {#if group.totalSSL === group.subdomains.length}
+                <span class="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                  <ShieldCheck size={11} />
+                  SSL ✓
+                </span>
+              {:else if group.totalSSL > 0}
+                <span class="inline-flex items-center gap-1 text-[10px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full">
+                  <ShieldAlert size={11} />
+                  SSL {group.totalSSL}/{group.subdomains.length}
+                </span>
+              {:else}
+                <span class="inline-flex items-center gap-1 text-[10px] text-zinc-500 bg-zinc-500/10 px-2 py-0.5 rounded-full">
+                  <Shield size={11} />
+                  No SSL
+                </span>
+              {/if}
+            </div>
+          </button>
+
+          <!-- Subdomain List (Expanded) -->
+          {#if group.expanded}
+            <div class="border-t border-border/60">
+              {#each group.subdomains as domain, idx (domain.domain)}
+                <div
+                  class="flex items-center gap-3 px-4 py-3 text-xs transition-colors hover:bg-secondary/10
+                    {idx < group.subdomains.length - 1 ? 'border-b border-border/30' : ''}
+                    {domain.domain === group.rootDomain ? 'bg-secondary/5' : ''}
+                  "
+                >
+                  <!-- Indent line + Star -->
+                  <div class="flex items-center gap-2 shrink-0 pl-5">
+                    <button
+                      type="button"
+                      on:click={() => onToggleStar(domain.domain, !!domain.is_starred)}
+                      class="focus:outline-none transition-transform hover:scale-110 active:scale-95"
+                      title={domain.is_starred ? "Bỏ nổi bật" : "Đánh dấu nổi bật"}
+                    >
+                      {#if domain.is_starred}
+                        <Star size={12} class="text-amber-400 fill-amber-400" />
+                      {:else}
+                        <Star size={12} class="text-muted-foreground/30 hover:text-amber-400/80 transition-colors" />
+                      {/if}
+                    </button>
+                  </div>
+
+                  <!-- Domain name (clickable → detail) -->
                   <button
                     type="button"
                     on:click={() => onSelectDomain(domain)}
-                    class="font-semibold text-foreground hover:text-primary hover:underline text-left transition-colors font-sans"
+                    class="font-semibold text-foreground hover:text-primary hover:underline text-left transition-colors font-sans flex-1 truncate min-w-0"
+                    title={domain.domain}
                   >
-                    {domain.domain}
+                    {#if domain.domain === group.rootDomain}
+                      <span class="text-blue-400">{domain.domain}</span>
+                    {:else}
+                      {domain.domain}
+                    {/if}
                   </button>
+
+                  <!-- Note (truncated) -->
+                  {#if domain.note}
+                    <span class="text-muted-foreground truncate max-w-[160px] hidden md:block" title={domain.note}>
+                      {domain.note}
+                    </span>
+                  {/if}
+
+                  <!-- Status dot + HTTP code -->
+                  <div class="flex items-center gap-2 shrink-0">
+                    <span class="flex items-center gap-1.5">
+                      <span class="h-1.5 w-1.5 rounded-full {domain.status === 'online' ? 'bg-emerald-500' : domain.status === 'offline' ? 'bg-rose-500' : 'bg-zinc-500'}"></span>
+                      <span class="text-muted-foreground capitalize hidden sm:inline">{domain.status}</span>
+                    </span>
+
+                    <span class="tabular-nums font-mono w-10 text-right {domain.code >= 200 && domain.code < 400 ? 'text-emerald-400' : 'text-rose-400'}">
+                      {domain.code || "--"}
+                    </span>
+                  </div>
+
+                  <!-- SSL badge -->
+                  <div class="shrink-0 w-28 text-right">
+                    {#if domain.ssl_active}
+                      <button
+                        type="button"
+                        on:click={() => triggerSSLAction(domain)}
+                        class="inline-flex items-center gap-1 text-emerald-500 hover:text-emerald-400 transition-colors focus:outline-none"
+                        title="Xem chi tiết hoặc gia hạn SSL"
+                      >
+                        <ShieldCheck size={12} />
+                        <span>{domain.ssl_days}d</span>
+                      </button>
+                    {:else}
+                      <button
+                        type="button"
+                        on:click={() => triggerSSLAction(domain)}
+                        class="inline-flex items-center gap-1 text-amber-500 hover:text-amber-400 transition-colors focus:outline-none"
+                        title="Kích hoạt Let's Encrypt SSL"
+                      >
+                        <ShieldAlert size={12} />
+                        <span class="underline decoration-dotted">No SSL</span>
+                      </button>
+                    {/if}
+                  </div>
+
+                  <!-- Actions -->
+                  <div class="flex items-center gap-3 shrink-0">
+                    <a
+                      href={`https://${domain.domain}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      class="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 font-medium transition-colors"
+                      title="Truy cập website"
+                    >
+                      <ExternalLink size={12} />
+                      <span class="hidden lg:inline">Truy cập</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      on:click={() => setDomainNote({ domain: domain.domain, note: domain.note || "" })}
+                      class="text-cyan-400 hover:text-cyan-300 font-medium transition-colors"
+                    >
+                      Ghi chú
+                    </button>
+
+                    <button
+                      type="button"
+                      on:click={() => setDomainDelete({ domain: domain.domain, deleteDb: false, deleteRoot: false })}
+                      class="inline-flex items-center gap-1 text-rose-400 hover:text-rose-300 transition-colors font-medium"
+                    >
+                      <Trash2 size={12} />
+                      <span class="hidden sm:inline">Xóa</span>
+                    </button>
+                  </div>
                 </div>
-              </td>
-              <td class="max-w-[320px] px-6 py-4 text-muted-foreground whitespace-pre-line leading-relaxed">
-                {domain.note || "--"}
-              </td>
-              <td class="px-6 py-4">
-                <div class="flex items-center gap-2">
-                  <span
-                    class="h-1.5 w-1.5 rounded-full {domain.status === 'online' ? 'bg-emerald-500' : domain.status === 'offline' ? 'bg-rose-500' : 'bg-zinc-500'}"
-                  />
-                  <span class="capitalize font-light">{domain.status}</span>
-                </div>
-              </td>
-              <td class="px-6 py-4 tabular-nums">
-                <span class={domain.code >= 200 && domain.code < 400 ? "text-emerald-400 font-medium" : "text-rose-400 font-medium"}>
-                  {domain.code || "--"}
-                </span>
-              </td>
-              <td class="px-6 py-4 tabular-nums text-muted-foreground font-mono">
-                {domain.requests !== undefined ? domain.requests.toLocaleString() : "--"}
-              </td>
-              <td class="px-6 py-4">
-                {#if domain.ssl_active}
-                  <button
-                    type="button"
-                    on:click={() => triggerSSLAction(domain)}
-                    class="inline-flex items-center gap-1.5 text-emerald-500 hover:text-emerald-400 font-semibold transition-colors focus:outline-none"
-                    title="Xem chi tiết hoặc gia hạn SSL"
-                  >
-                    <ShieldCheck size={14} />
-                    <span>Còn {domain.ssl_days} ngày</span>
-                  </button>
-                {:else}
-                  <button
-                    type="button"
-                    on:click={() => triggerSSLAction(domain)}
-                    class="inline-flex items-center gap-1.5 text-amber-500 hover:text-amber-400 font-semibold transition-colors focus:outline-none"
-                    title="Kích hoạt Let's Encrypt SSL"
-                  >
-                    <ShieldAlert size={14} />
-                    <span class="underline decoration-dotted decoration-amber-500/50 hover:decoration-amber-400">Chưa thiết lập</span>
-                  </button>
-                {/if}
-              </td>
-              <td class="px-6 py-4 text-right">
-                <div class="flex items-center justify-end gap-3.5">
-                  <a
-                    href={`http://${domain.domain}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    class="text-blue-400 hover:text-blue-300 font-medium"
-                  >
-                    Truy cập
-                  </a>
-                  <a
-                    href={`https://www.google.com/search?q=${encodeURIComponent(`site:https://${domain.domain}`)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    class="text-amber-400 hover:text-amber-300 font-medium"
-                  >
-                    Google
-                  </a>
-                  <button
-                    type="button"
-                    on:click={() => setDomainNote({ domain: domain.domain, note: domain.note || "" })}
-                    class="text-cyan-400 hover:text-cyan-300 font-medium"
-                  >
-                    Ghi chú
-                  </button>
-                  <button
-                    type="button"
-                    on:click={() => setDomainDelete({ domain: domain.domain, deleteDb: false, deleteRoot: false })}
-                    class="inline-flex items-center gap-1 text-rose-400 hover:text-rose-300 transition-colors font-medium"
-                  >
-                    <Trash2 size={13} />
-                    <span>Xóa</span>
-                  </button>
-                </div>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/each}
     </div>
-  </div>
+  {/if}
 
   <!-- Create Website Modal -->
   {#if showCreateModal}
@@ -486,7 +537,7 @@
               </div>
             </div>
 
-            <!-- PHP Version Select (Only if Type == php) -->
+            <!-- PHP Version Select -->
             {#if websiteType === "php"}
               <div class="space-y-2">
                 <!-- svelte-ignore a11y-label-has-associated-control -->
@@ -512,7 +563,7 @@
               </div>
             {/if}
 
-            <!-- Proxy Pass Target (Only if Type == proxy) -->
+            <!-- Proxy Pass Target -->
             {#if websiteType === "proxy"}
               <div class="space-y-2">
                 <label for="proxyPass" class="text-xs font-light text-muted-foreground">Proxy Destination (Nơi chuyển tiếp)</label>
@@ -528,7 +579,7 @@
               </div>
             {/if}
 
-            <!-- Checkboxes: Create DB & SSL -->
+            <!-- Checkboxes -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
               {#if websiteType === "php"}
                 <!-- svelte-ignore a11y-label-has-associated-control -->
