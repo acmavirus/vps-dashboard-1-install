@@ -213,6 +213,7 @@ func main() {
 		registerTerminalRoutes(api)
 		registerPHPRoutes(api)
 		registerBackupRoutes(api)
+		registerFtpRoutes(api)
 		registerProtectedAuthRoutes(api)
 	}
 

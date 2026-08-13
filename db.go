@@ -82,6 +82,12 @@ func createTables() {
 			net_sent INTEGER,
 			net_recv INTEGER
 		);`,
+
+		`CREATE TABLE IF NOT EXISTS ftp_users (
+			username TEXT PRIMARY KEY,
+			path TEXT,
+			status TEXT DEFAULT 'active'
+		);`,
 	}
 
 	for _, q := range queries {
