@@ -188,8 +188,11 @@ func registerSystemRoutes(api *gin.RouterGroup) {
 	api.POST("/settings/restart", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 		go func() {
+			time.Sleep(500 * time.Millisecond)
+			if runtime.GOOS != "windows" {
+				_ = exec.Command("sh", "-c", "sleep 0.5 && (systemctl restart vps-dashboard || systemctl restart vps-dash || service vps-dashboard restart)").Start()
+			}
 			time.Sleep(1 * time.Second)
-			_ = exec.Command("systemctl", "restart", "vps-dashboard").Run()
 			os.Exit(0)
 		}()
 	})

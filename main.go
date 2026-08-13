@@ -135,6 +135,147 @@ func autoHealNginxLogs() {
 	}
 }
 
+func ensureDefaultNginxPage() {
+	paths := getDomainPaths()
+	sitesAvailableDir := paths.sitesAvailableDir
+	sitesEnabledDir := paths.sitesEnabledDir
+	defaultHtmlDir := "/var/www/default"
+
+	if runtime.GOOS == "windows" {
+		defaultHtmlDir = "./logs/www-default"
+		_ = os.MkdirAll(sitesAvailableDir, 0755)
+		_ = os.MkdirAll(sitesEnabledDir, 0755)
+	}
+
+	_ = os.MkdirAll(defaultHtmlDir, 0755)
+
+	htmlPath := filepath.Join(defaultHtmlDir, "index.html")
+	if _, err := os.Stat(htmlPath); os.IsNotExist(err) {
+		defaultHtmlContent := `<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tên miền chưa cấu hình</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .card {
+            background-color: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 480px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        }
+        .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #38bdf8;
+            margin-bottom: 12px;
+        }
+        p {
+            color: #94a3b8;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">🌐</div>
+        <h1>Tên Miền Chưa Cấu Hình</h1>
+        <p>Tên miền này đã trỏ thành công về IP Server, nhưng chưa được thiết lập Virtual Host trên Nginx.</p>
+    </div>
+</body>
+</html>`
+		_ = os.WriteFile(htmlPath, []byte(defaultHtmlContent), 0644)
+	}
+
+	configPath := filepath.Join(sitesAvailableDir, "00-default.conf")
+	configCreated := false
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		rootPath := filepath.ToSlash(defaultHtmlDir)
+		var configContent string
+		if runtime.GOOS == "windows" {
+			configContent = fmt.Sprintf(`server {
+    listen 80 default_server;
+
+    server_name _;
+
+    root %s;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+`, rootPath)
+		} else {
+			configContent = fmt.Sprintf(`server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    server_name _;
+
+    root %s;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    access_log /var/log/nginx/default_access.log;
+    error_log /var/log/nginx/default_error.log;
+}
+`, rootPath)
+		}
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err == nil {
+			configCreated = true
+		}
+	}
+
+	legacyDefaultLink := filepath.Join(sitesEnabledDir, "default")
+	if _, err := os.Lstat(legacyDefaultLink); err == nil {
+		_ = os.Remove(legacyDefaultLink)
+		configCreated = true
+	}
+
+	enabledLink := filepath.Join(sitesEnabledDir, "00-default.conf")
+	if _, err := os.Lstat(enabledLink); os.IsNotExist(err) {
+		if runtime.GOOS != "windows" {
+			if err := os.Symlink(configPath, enabledLink); err == nil {
+				configCreated = true
+			}
+		} else {
+			configBytes, _ := os.ReadFile(configPath)
+			_ = os.WriteFile(enabledLink, configBytes, 0644)
+			configCreated = true
+		}
+	}
+
+	if configCreated && runtime.GOOS != "windows" {
+		if err := exec.Command("nginx", "-t").Run(); err == nil {
+			_ = exec.Command("systemctl", "reload", "nginx").Run()
+		}
+	}
+}
+
 func main() {
 	_ = godotenv.Load(".env")
 
@@ -143,6 +284,9 @@ func main() {
 
 	// Scan and auto-heal missing Nginx logs
 	autoHealNginxLogs()
+
+	// Ensure Nginx default catch-all page exists
+	ensureDefaultNginxPage()
 
 	// Start Intrusion Prevention System (IPS) background routine
 	go startIntrusionPreventionSystem()

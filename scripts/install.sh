@@ -80,6 +80,94 @@ WantedBy=multi-user.target
 EOF
 fi
 
+# Cấu hình Nginx Default Catch-All Page (xử lý domain chưa gán vhost)
+if command -v nginx > /dev/null 2>&1; then
+    echo -e "${GREEN}Đang cấu hình Nginx Default Catch-All Page...${NC}"
+    mkdir -p /var/www/default
+    if [ ! -f "/var/www/default/index.html" ]; then
+        cat <<'EOF' > /var/www/default/index.html
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tên miền chưa cấu hình</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .card {
+            background-color: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 480px;
+            width: 100%;
+            text-align: center;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        }
+        .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        h1 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #38bdf8;
+            margin-bottom: 12px;
+        }
+        p {
+            color: #94a3b8;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">🌐</div>
+        <h1>Tên Miền Chưa Cấu Hình</h1>
+        <p>Tên miền này đã trỏ thành công về IP Server, nhưng chưa được thiết lập Virtual Host trên Nginx.</p>
+    </div>
+</body>
+</html>
+EOF
+    fi
+
+    if [ ! -f "/etc/nginx/sites-available/00-default.conf" ]; then
+        cat <<'EOF' > /etc/nginx/sites-available/00-default.conf
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    server_name _;
+
+    root /var/www/default;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    access_log /var/log/nginx/default_access.log;
+    error_log /var/log/nginx/default_error.log;
+}
+EOF
+    fi
+
+    rm -f /etc/nginx/sites-enabled/default
+    ln -sf /etc/nginx/sites-available/00-default.conf /etc/nginx/sites-enabled/00-default.conf
+    nginx -t > /dev/null 2>&1 && systemctl reload nginx > /dev/null 2>&1 || true
+fi
+
 # Kích hoạt và Khởi động lại
 systemctl daemon-reload
 systemctl enable $SERVICE_NAME > /dev/null 2>&1
