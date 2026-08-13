@@ -176,6 +176,28 @@ func runSiteBackup(domain string) (string, error) {
 
 	rootPath, err := parseNginxRoot(configPath)
 	if err != nil {
+		candidates := []string{
+			filepath.Join("/home", domain),
+			filepath.Join("/var/www", domain),
+			filepath.Join("/var/www/html", domain),
+			filepath.Join("/srv/www", domain),
+			filepath.Join("/opt", domain),
+		}
+		if runtime.GOOS == "windows" {
+			candidates = []string{
+				filepath.Join(".", "logs", "www", domain),
+				filepath.Join(".", "www", domain),
+			}
+		}
+		for _, cand := range candidates {
+			if fileExists(cand) {
+				rootPath = cand
+				err = nil
+				break
+			}
+		}
+	}
+	if err != nil || rootPath == "" {
 		return "", fmt.Errorf("cannot parse root from nginx config: %w", err)
 	}
 

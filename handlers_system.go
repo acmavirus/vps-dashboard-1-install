@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,12 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
+)
+
+var (
+	globalCpuUsage     float64
+	cpuUsageMutex      sync.RWMutex
+	cpuAlertCounter    int
 )
 
 func registerSystemRoutes(api *gin.RouterGroup) {
@@ -244,12 +251,54 @@ func saveSettingsToEnv(username, password, telegramToken, telegramChatID string)
 	return os.WriteFile(".env", []byte(strings.Join(lines, "\n")), 0600)
 }
 
+func startCpuMonitor() {
+	// Đo nhanh lần đầu để khởi tạo giá trị
+	if percents, err := cpu.Percent(100*time.Millisecond, false); err == nil && len(percents) > 0 {
+		cpuUsageMutex.Lock()
+		globalCpuUsage = percents[0]
+		cpuUsageMutex.Unlock()
+	}
+
+	for {
+		// Đo CPU trong 1 giây để lọc các spike tức thời
+		cpuPercents, err := cpu.Percent(time.Second, false)
+		if err == nil && len(cpuPercents) > 0 {
+			cpuUsageMutex.Lock()
+			globalCpuUsage = cpuPercents[0]
+			cpuUsageMutex.Unlock()
+
+			// Gửi cảnh báo nếu CPU cao liên tục trong 3 chu kỳ (~15 giây)
+			if cpuPercents[0] > 90.0 {
+				cpuAlertCounter++
+				if cpuAlertCounter >= 3 {
+					if time.Since(lastCpuAlert) > 10*time.Minute {
+						hostname, _ := os.Hostname()
+						var loadStr string
+						if avg, err := load.Avg(); err == nil {
+							loadStr = fmt.Sprintf("%.2f, %.2f, %.2f", avg.Load1, avg.Load5, avg.Load15)
+						} else {
+							loadStr = "N/A"
+						}
+						msg := fmt.Sprintf("🚨 [CPU ALERT] VPS: %s\nLoad CPU: %.1f%% (Cao liên tục >15s)\nLoad Avg: %s", hostname, cpuPercents[0], loadStr)
+						go sendTelegram(msg)
+						lastCpuAlert = time.Now()
+					}
+				}
+			} else {
+				cpuAlertCounter = 0
+			}
+		}
+		time.Sleep(4 * time.Second) // Chu kỳ cập nhật mỗi 5 giây (1s đo + 4s ngủ)
+	}
+}
+
 func getStats() SystemStats {
 	vm, _ := mem.VirtualMemory()
-	var cpuVal float64
-	if cpuPercent, err := cpu.Percent(100*time.Millisecond, false); err == nil && len(cpuPercent) > 0 {
-		cpuVal = cpuPercent[0]
-	}
+	
+	cpuUsageMutex.RLock()
+	cpuVal := globalCpuUsage
+	cpuUsageMutex.RUnlock()
+
 	d, _ := disk.Usage("/")
 	h, _ := host.Info()
 	n, _ := net.IOCounters(false)
@@ -314,11 +363,7 @@ func getStats() SystemStats {
 		SpamAlerts:  alertsCopy,
 	}
 
-	if stats.CPU > 90.0 && time.Since(lastCpuAlert) > 5*time.Minute {
-		msg := fmt.Sprintf("🚨 [CPU ALERT] VPS: %s\nLoad: %.1f%%", stats.Hostname, stats.CPU)
-		go sendTelegram(msg)
-		lastCpuAlert = time.Now()
-	}
+	// CPU Alert được xử lý trong background goroutine startCpuMonitor()
 
 	if stats.Connections > 2000 && time.Since(lastDdosAlert) > 10*time.Minute {
 		msg := fmt.Sprintf("⚠️ [DDoS ALERT] VPS: %s\nConnections: %d", stats.Hostname, stats.Connections)

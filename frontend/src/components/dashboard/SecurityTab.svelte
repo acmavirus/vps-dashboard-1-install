@@ -46,6 +46,11 @@
     action: string
   }
 
+  interface CFZone {
+    id: string
+    name: string
+  }
+
   let status: FirewallStatus = {
     enabled: false,
     logging: "unknown",
@@ -83,7 +88,11 @@
   let saveIPSLoading = false
   let logsLoading = false
   let manualBanIP = ""
+  let manualBanDomain = ""
   let manualBanLoading = false
+
+  let cfZones: CFZone[] = []
+  let cfZonesLoading = false
 
   // Reactive helpers
   $: bannedRules = status.rules.filter(rule => {
@@ -217,12 +226,20 @@
           "Content-Type": "application/json",
           Authorization: token || "",
         },
-        body: JSON.stringify({ ip: manualBanIP.trim() }),
+        body: JSON.stringify({ 
+          ip: manualBanIP.trim(),
+          domain: manualBanDomain.trim()
+        }),
       })
       const data = await response.json()
       if (response.ok) {
-        toast.success("IP banned", `${manualBanIP.trim()} has been blocked in firewall rules.`)
+        let msg = `${manualBanIP.trim()} has been blocked in UFW firewall rules.`
+        if (manualBanDomain.trim()) {
+          msg += ` Ban request also sent to Cloudflare zone ${manualBanDomain.trim()}.`
+        }
+        toast.success("IP banned", msg)
         manualBanIP = ""
+        manualBanDomain = ""
         await fetchStatus()
         await fetchIPSLogs()
       } else {
@@ -495,10 +512,31 @@
     }
   }
 
+  async function fetchCFZones() {
+    cfZonesLoading = true
+    try {
+      const response = await fetch("/api/security/cloudflare/zones", {
+        headers: {
+          Authorization: token || "",
+        },
+      })
+      if (response.ok) {
+        cfZones = await response.json()
+      } else {
+        console.error("Failed to load Cloudflare zones")
+      }
+    } catch (e) {
+      console.error("Connection error while fetching Cloudflare zones", e)
+    } finally {
+      cfZonesLoading = false
+    }
+  }
+
   onMount(() => {
     fetchStatus()
     fetchIPSSettings()
     fetchIPSLogs()
+    fetchCFZones()
 
     const ipsLogRefresh = window.setInterval(() => {
       if (activeSubTab === "ips") {
@@ -872,6 +910,23 @@
                 class="w-full rounded-lg border border-border bg-secondary/20 px-3 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary font-mono"
                 required
               />
+            </div>
+            <div class="space-y-1.5">
+              <label for="manual-ban-domain" class="text-[10px] font-semibold text-muted-foreground">Domain (Optional for Cloudflare)</label>
+              {#if cfZonesLoading}
+                <div class="text-[10px] text-muted-foreground animate-pulse">Loading domains from Cloudflare...</div>
+              {:else}
+                <select 
+                  id="manual-ban-domain"
+                  bind:value={manualBanDomain}
+                  class="w-full rounded-lg border border-border bg-secondary/20 px-3 py-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="">-- Chỉ chặn UFW (Không đồng bộ Cloudflare) --</option>
+                  {#each cfZones as zone}
+                    <option value={zone.name}>{zone.name}</option>
+                  {/each}
+                </select>
+              {/if}
             </div>
             <button 
               type="submit" 

@@ -6,8 +6,16 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
+)
+
+var (
+	cachedDockerStats []DockerInfo
+	lastDockerCheck   time.Time
+	dockerMutex       sync.Mutex
 )
 
 func registerDockerRoutes(api *gin.RouterGroup) {
@@ -81,6 +89,14 @@ func getDockerStats() []DockerInfo {
 	if runtime.GOOS == "windows" {
 		return []DockerInfo{{Name: "demo-container", Status: "Running", Image: "nginx:latest", CPU: "0.5%", MEM: "120MB"}}
 	}
+
+	dockerMutex.Lock()
+	defer dockerMutex.Unlock()
+
+	if len(cachedDockerStats) > 0 && time.Since(lastDockerCheck) < 10*time.Second {
+		return cachedDockerStats
+	}
+
 	// Use docker stats command for simplicity
 	cmd := exec.Command("docker", "stats", "--no-stream", "--format", "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}")
 	output, _ := cmd.CombinedOutput()
@@ -110,5 +126,9 @@ func getDockerStats() []DockerInfo {
 			}
 		}
 	}
+
+	cachedDockerStats = results
+	lastDockerCheck = time.Now()
+
 	return results
 }

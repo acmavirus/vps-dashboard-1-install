@@ -60,7 +60,8 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 
 	api.POST("/security/ban", func(c *gin.Context) {
 		var req struct {
-			IP string `json:"ip"`
+			IP     string `json:"ip"`
+			Domain string `json:"domain"`
 		}
 		if err := c.BindJSON(&req); err != nil {
 			c.JSON(400, gin.H{"error": "Invalid request"})
@@ -68,6 +69,7 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 		}
 
 		ip := strings.TrimSpace(req.IP)
+		domain := strings.TrimSpace(req.Domain)
 		if stdnet.ParseIP(ip) == nil {
 			c.JSON(400, gin.H{"error": "Invalid IP address"})
 			return
@@ -78,20 +80,37 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 			return
 		}
 
+		var cfMsg string
+		// Thử ban qua Cloudflare trước nếu được truyền domain hợp lệ
+		if domain != "" && domain != "-" && domain != "Default Server" {
+			cfBlocked, cfErr := banIPCloudflare(ip, domain)
+			if cfErr == nil && cfBlocked {
+				cfMsg = " & blocked on Cloudflare"
+			} else {
+				log.Printf("[Manual Ban] Cloudflare ban failed/not applicable for %s: %v\n", domain, cfErr)
+				cfMsg = " & Cloudflare ban failed"
+			}
+		}
+
 		if runtime.GOOS == "windows" {
 			_ = logSecurityEventSQL(SecurityLogEntry{
 				IP:        ip,
 				Timestamp: time.Now(),
 				URI:       "Manual Ban",
-				Domain:    "-",
+				Domain:    domain,
 				UserAgent: "-",
-				Action:    "Simulation Banned Manually",
+				Action:    "Simulation Banned Manually" + cfMsg,
 			})
-			c.JSON(200, gin.H{"status": "ok", "message": "Simulation: Banned IP " + ip})
+			c.JSON(200, gin.H{"status": "ok", "message": "Simulation: Banned IP " + ip + cfMsg})
 			return
 		}
 
-		cmd := exec.Command("ufw", "insert", "1", "deny", "from", ip, "to", "any")
+		var cmd *exec.Cmd
+		if strings.Contains(ip, ":") {
+			cmd = exec.Command("ufw", "deny", "from", ip, "to", "any")
+		} else {
+			cmd = exec.Command("ufw", "insert", "1", "deny", "from", ip, "to", "any")
+		}
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error(), "details": string(output)})
@@ -102,12 +121,12 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 			IP:        ip,
 			Timestamp: time.Now(),
 			URI:       "Manual Ban",
-			Domain:    "-",
+			Domain:    domain,
 			UserAgent: "-",
-			Action:    "Banned Manually",
+			Action:    "Banned Manually" + cfMsg,
 		})
 
-		c.JSON(200, gin.H{"status": "ok", "message": string(output)})
+		c.JSON(200, gin.H{"status": "ok", "message": strings.TrimSpace(string(output)) + cfMsg})
 	})
 
 	api.POST("/security/unban", func(c *gin.Context) {
@@ -125,6 +144,16 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 			return
 		}
 
+		// Gọi gỡ chặn trên Cloudflare song song
+		cfUnbannedCount, cfErr := unbanIPCloudflare(ip)
+		var cfMsg string
+		if cfErr != nil {
+			log.Printf("[Manual Unban] Cloudflare unban error: %v\n", cfErr)
+			cfMsg = " (Cloudflare unban error)"
+		} else if cfUnbannedCount > 0 {
+			cfMsg = fmt.Sprintf(" (Removed %d rules from Cloudflare)", cfUnbannedCount)
+		}
+
 		if runtime.GOOS == "windows" {
 			_ = logSecurityEventSQL(SecurityLogEntry{
 				IP:        ip,
@@ -132,15 +161,20 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 				URI:       "Manual Unban",
 				Domain:    "-",
 				UserAgent: "-",
-				Action:    "Simulation Unbanned Manually",
+				Action:    "Simulation Unbanned Manually" + cfMsg,
 			})
-			c.JSON(200, gin.H{"status": "ok", "message": "Simulation: Unbanned IP " + ip})
+			c.JSON(200, gin.H{"status": "ok", "message": "Simulation: Unbanned IP " + ip + cfMsg})
 			return
 		}
 
 		cmd := exec.Command("ufw", "delete", "deny", "from", ip)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
+			// Nếu gỡ Cloudflare thành công nhưng UFW lỗi, vẫn có thể báo thành công một phần
+			if cfUnbannedCount > 0 {
+				c.JSON(200, gin.H{"status": "ok", "message": fmt.Sprintf("Removed %d rules from Cloudflare. UFW error: %s", cfUnbannedCount, strings.TrimSpace(string(output)))})
+				return
+			}
 			c.JSON(500, gin.H{"error": err.Error(), "details": string(output)})
 			return
 		}
@@ -151,10 +185,19 @@ func registerSecurityRoutes(api *gin.RouterGroup) {
 			URI:       "Manual Unban",
 			Domain:    "-",
 			UserAgent: "-",
-			Action:    "Unbanned Manually",
+			Action:    "Unbanned Manually" + cfMsg,
 		})
 
-		c.JSON(200, gin.H{"status": "ok", "message": string(output)})
+		c.JSON(200, gin.H{"status": "ok", "message": strings.TrimSpace(string(output)) + cfMsg})
+	})
+
+	api.GET("/security/cloudflare/zones", func(c *gin.Context) {
+		zones, err := getCFZones()
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(200, zones)
 	})
 
 	// Firewall Endpoints
@@ -621,19 +664,42 @@ func runIPSScan(offsets map[string]int64) {
 							continue
 						}
 
+						var cfMsg string
+						var cfBlocked bool
+						// Thử ban qua Cloudflare API
+						if domain != "" && domain != "-" && domain != "Default Server" {
+							var cfErr error
+							cfBlocked, cfErr = banIPCloudflare(ip, domain)
+							if cfErr == nil && cfBlocked {
+								cfMsg = " & Cloudflare Blocked"
+								log.Printf("[IPS] Banned IP %s on Cloudflare for probing %s on domain %s\n", ip, uri, domain)
+							} else {
+								log.Printf("[IPS] Cloudflare ban failed/not applicable for %s (%v)\n", domain, cfErr)
+							}
+						}
+
 						actionResult := "Banned"
 						if runtime.GOOS == "windows" {
-							log.Printf("[IPS SIMULATION] Ban IP %s for probing %s on %s\n", ip, uri, domain)
-							actionResult = "Simulation Blocked"
+							log.Printf("[IPS SIMULATION] Ban IP %s for probing %s on %s%s\n", ip, uri, domain, cfMsg)
+							actionResult = "Simulation Blocked" + cfMsg
 						} else {
-							cmd := exec.Command("ufw", "insert", "1", "deny", "from", ip, "to", "any")
+							var cmd *exec.Cmd
+							if strings.Contains(ip, ":") {
+								cmd = exec.Command("ufw", "deny", "from", ip, "to", "any")
+							} else {
+								cmd = exec.Command("ufw", "insert", "1", "deny", "from", ip, "to", "any")
+							}
 							output, cmdErr := cmd.CombinedOutput()
 							if cmdErr != nil {
-								log.Printf("[IPS ERROR] Failed to ban IP %s: %s\n", ip, string(output))
-								actionResult = "Failed to Ban"
+								log.Printf("[IPS ERROR] Failed to ban IP %s via UFW: %s\n", ip, string(output))
+								actionResult = "Failed to Ban UFW"
+								if cfBlocked {
+									actionResult = "Cloudflare Blocked Only"
+								}
 							} else {
-								log.Printf("[IPS] Banned IP %s for probing %s on %s\n", ip, uri, domain)
+								log.Printf("[IPS] Banned IP %s via UFW for probing %s on %s\n", ip, uri, domain)
 								bannedIPs[ip] = true
+								actionResult = "UFW Blocked" + cfMsg
 							}
 						}
 

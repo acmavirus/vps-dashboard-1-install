@@ -378,14 +378,15 @@ func parseNginxRoot(configPath string) (string, error) {
 		if idx := strings.Index(line, "#"); idx >= 0 {
 			line = strings.TrimSpace(line[:idx])
 		}
-		if !strings.HasPrefix(line, "root ") {
-			continue
-		}
-		root := strings.TrimSpace(strings.TrimPrefix(line, "root"))
-		root = strings.TrimSuffix(root, ";")
-		root = strings.Trim(root, `"'`)
-		if root != "" {
-			return filepath.Clean(root), nil
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "root" {
+			root := strings.Join(fields[1:], " ")
+			root = strings.TrimSuffix(root, ";")
+			root = strings.TrimSpace(root)
+			root = strings.Trim(root, `"'`)
+			if root != "" {
+				return filepath.Clean(root), nil
+			}
 		}
 	}
 
@@ -605,14 +606,40 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 	rootPath, err := parseNginxRoot(configPath)
 	if err == nil {
 		result.RootPath = getAppRoot(rootPath)
+	} else {
+		candidates := []string{
+			filepath.Join("/home", domain),
+			filepath.Join("/var/www", domain),
+			filepath.Join("/var/www/html", domain),
+			filepath.Join("/srv/www", domain),
+			filepath.Join("/opt", domain),
+		}
+		if runtime.GOOS == "windows" {
+			candidates = []string{
+				filepath.Join(".", "logs", "www", domain),
+				filepath.Join(".", "www", domain),
+			}
+		}
+		for _, cand := range candidates {
+			if fileExists(cand) {
+				result.RootPath = cand
+				break
+			}
+		}
 	}
 
 	if deleteRoot {
-		if result.RootPath == "" {
-			return result, fmt.Errorf("cannot detect root path from nginx config")
-		}
-		if !isAllowedRootDeletePath(result.RootPath) {
-			return result, fmt.Errorf("root path is outside allowed delete scope: %s", result.RootPath)
+		if result.RootPath != "" {
+			if !isAllowedRootDeletePath(result.RootPath) {
+				return result, fmt.Errorf("root path is outside allowed delete scope: %s", result.RootPath)
+			}
+			existed := fileExists(result.RootPath)
+			if err := removeAllIfExists(result.RootPath); err != nil {
+				return result, fmt.Errorf("failed to delete root folder %s: %w", result.RootPath, err)
+			}
+			if existed {
+				result.Deleted = append(result.Deleted, "directory:"+result.RootPath)
+			}
 		}
 	}
 

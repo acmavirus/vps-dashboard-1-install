@@ -153,6 +153,9 @@ func main() {
 	// Start interactive Telegram Bot
 	go startTelegramBot()
 
+	// Start background CPU Usage Monitor (1s sampling)
+	go startCpuMonitor()
+
 	// Cache CPU hardware specs at startup
 	if info, err := cpu.Info(); err == nil && len(info) > 0 {
 		cachedCPUModel = info[0].ModelName

@@ -137,16 +137,20 @@
         }),
       })
       if (response.ok) {
-        successMsg = "Settings updated successfully! Changes saved to environment configuration."
+        const msg = "Cấu hình đã được lưu thành công vào cơ sở dữ liệu và file .env!"
         newPassword = ""
         confirmPassword = ""
         await fetchSettings()
+        successMsg = msg
+        toast.success("Thành công", msg)
       } else {
         const errData = await response.json().catch(() => ({}))
         error = errData.error || "Failed to save settings"
+        toast.error("Thất bại", error)
       }
     } catch {
       error = "Connection error"
+      toast.error("Lỗi kết nối", "Không thể kết nối tới server.")
     } finally {
       saving = false
     }
