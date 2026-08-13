@@ -620,6 +620,14 @@
           },
         ]
       : []),
+    ...(logs?.nginx_sites
+      ? logs.nginx_sites.map(site => ({
+          key: `site:${site.domain}`,
+          label: site.domain,
+          icon: Globe,
+          color: "text-cyan-400",
+        }))
+      : [])
   ] as LogTabItem[]
 
   $: currentLog = (() => {
@@ -628,6 +636,14 @@
     if (logTab === "panel") return logs.panel
     if (logTab === "nginx_access") return logs.nginx_access
     if (logTab === "nginx_error") return logs.nginx_error
+
+    if (logTab.startsWith("site:")) {
+      const domainName = logTab.replace("site:", "")
+      const site = logs.nginx_sites?.find(s => s.domain === domainName)
+      if (site) {
+        return siteTab === "access" ? site.access : site.error
+      }
+    }
 
     return null
   })()
