@@ -80,10 +80,19 @@ WantedBy=multi-user.target
 EOF
 fi
 
-# Cấu hình Nginx Default Catch-All Page (xử lý domain chưa gán vhost)
+# Cấu hình Nginx Default Catch-All Page (xử lý domain chưa gán vhost cho cả HTTP & HTTPS)
 if command -v nginx > /dev/null 2>&1; then
-    echo -e "${GREEN}Đang cấu hình Nginx Default Catch-All Page...${NC}"
+    echo -e "${GREEN}Đang cấu hình Nginx Default Catch-All Page (HTTP & HTTPS)...${NC}"
     mkdir -p /var/www/default
+    mkdir -p /etc/nginx/ssl
+
+    if [ ! -f "/etc/nginx/ssl/default.crt" ]; then
+        openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+            -keyout /etc/nginx/ssl/default.key \
+            -out /etc/nginx/ssl/default.crt \
+            -subj "/CN=default" > /dev/null 2>&1 || true
+    fi
+
     if [ ! -f "/var/www/default/index.html" ]; then
         cat <<'EOF' > /var/www/default/index.html
 <!DOCTYPE html>
@@ -142,8 +151,7 @@ if command -v nginx > /dev/null 2>&1; then
 EOF
     fi
 
-    if [ ! -f "/etc/nginx/sites-available/00-default.conf" ]; then
-        cat <<'EOF' > /etc/nginx/sites-available/00-default.conf
+    cat <<'EOF' > /etc/nginx/sites-available/00-default.conf
 server {
     listen 80 default_server;
     listen [::]:80 default_server;
@@ -160,8 +168,27 @@ server {
     access_log /var/log/nginx/default_access.log;
     error_log /var/log/nginx/default_error.log;
 }
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+
+    server_name _;
+
+    ssl_certificate /etc/nginx/ssl/default.crt;
+    ssl_certificate_key /etc/nginx/ssl/default.key;
+
+    root /var/www/default;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    access_log /var/log/nginx/default_access.log;
+    error_log /var/log/nginx/default_error.log;
+}
 EOF
-    fi
 
     rm -f /etc/nginx/sites-enabled/default
     ln -sf /etc/nginx/sites-available/00-default.conf /etc/nginx/sites-enabled/00-default.conf

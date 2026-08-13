@@ -140,14 +140,17 @@ func ensureDefaultNginxPage() {
 	sitesAvailableDir := paths.sitesAvailableDir
 	sitesEnabledDir := paths.sitesEnabledDir
 	defaultHtmlDir := "/var/www/default"
+	sslDir := "/etc/nginx/ssl"
 
 	if runtime.GOOS == "windows" {
 		defaultHtmlDir = "./logs/www-default"
+		sslDir = "./logs/ssl"
 		_ = os.MkdirAll(sitesAvailableDir, 0755)
 		_ = os.MkdirAll(sitesEnabledDir, 0755)
 	}
 
 	_ = os.MkdirAll(defaultHtmlDir, 0755)
+	_ = os.MkdirAll(sslDir, 0755)
 
 	htmlPath := filepath.Join(defaultHtmlDir, "index.html")
 	if _, err := os.Stat(htmlPath); os.IsNotExist(err) {
@@ -207,10 +210,31 @@ func ensureDefaultNginxPage() {
 		_ = os.WriteFile(htmlPath, []byte(defaultHtmlContent), 0644)
 	}
 
+	certPath := filepath.Join(sslDir, "default.crt")
+	keyPath := filepath.Join(sslDir, "default.key")
+
+	if runtime.GOOS != "windows" {
+		if _, err := os.Stat(certPath); os.IsNotExist(err) {
+			_ = exec.Command("openssl", "req", "-x509", "-nodes", "-days", "3650", "-newkey", "rsa:2048",
+				"-keyout", keyPath, "-out", certPath, "-subj", "/CN=default").Run()
+		}
+	} else {
+		if _, err := os.Stat(certPath); os.IsNotExist(err) {
+			_ = os.WriteFile(certPath, []byte("--- DUMMY CERT ---"), 0644)
+			_ = os.WriteFile(keyPath, []byte("--- DUMMY KEY ---"), 0644)
+		}
+	}
+
 	configPath := filepath.Join(sitesAvailableDir, "00-default.conf")
 	configCreated := false
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+
+	existingContent, _ := os.ReadFile(configPath)
+	contentStr := string(existingContent)
+
+	if contentStr == "" || !strings.Contains(contentStr, "listen 443") {
 		rootPath := filepath.ToSlash(defaultHtmlDir)
+		certPathStr := filepath.ToSlash(certPath)
+		keyPathStr := filepath.ToSlash(keyPath)
 		var configContent string
 		if runtime.GOOS == "windows" {
 			configContent = fmt.Sprintf(`server {
@@ -243,7 +267,27 @@ func ensureDefaultNginxPage() {
     access_log /var/log/nginx/default_access.log;
     error_log /var/log/nginx/default_error.log;
 }
-`, rootPath)
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+
+    server_name _;
+
+    ssl_certificate %s;
+    ssl_certificate_key %s;
+
+    root %s;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    access_log /var/log/nginx/default_access.log;
+    error_log /var/log/nginx/default_error.log;
+}
+`, rootPath, certPathStr, keyPathStr, rootPath)
 		}
 		if err := os.WriteFile(configPath, []byte(configContent), 0644); err == nil {
 			configCreated = true
