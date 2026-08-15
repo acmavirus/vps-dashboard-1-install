@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RefreshCw, Trash2, Plus, X, Globe, Shield, ShieldCheck, ShieldAlert, Clock, Database, ArrowRight, Loader2, Star, ChevronDown, ChevronRight, ExternalLink } from "lucide-svelte"
+  import { RefreshCw, Trash2, Plus, X, Globe, Shield, ShieldCheck, ShieldAlert, Clock, Database, ArrowRight, Loader2, Star, ChevronDown, ChevronRight, ExternalLink, Search } from "lucide-svelte"
   import type { DomainInfo, DomainDeleteState, DomainNoteState } from "./types"
   import { toast } from "../../lib/toast"
   import ConfirmModal from "../ConfirmModal.svelte"
@@ -436,6 +436,17 @@
                     >
                       <ExternalLink size={12} />
                       <span class="hidden lg:inline">Truy cập</span>
+                    </a>
+
+                    <a
+                      href={`https://www.google.com/search?q=site:${encodeURIComponent(domain.domain)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      class="inline-flex items-center gap-1 text-amber-400 hover:text-amber-300 font-medium transition-colors"
+                      title={`Tìm kiếm Google Index (site:${domain.domain})`}
+                    >
+                      <Search size={12} />
+                      <span class="hidden lg:inline">Google</span>
                     </a>
 
                     <button

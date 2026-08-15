@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte"
-  import { ArrowLeft, Globe, Terminal, FileText, Settings, ShieldCheck, Loader2, AlertTriangle, Save, Check } from "lucide-svelte"
+  import { ArrowLeft, Globe, Terminal, FileText, Settings, ShieldCheck, Loader2, AlertTriangle, Save, Check, ExternalLink, Search } from "lucide-svelte"
   import type { DomainInfo } from "./types"
 
   export let token: string | null = null
@@ -144,8 +144,30 @@
       </div>
     </div>
 
-    <!-- Quick Status Badge -->
-    <div class="flex items-center gap-3">
+    <!-- Quick Actions & Status Badge -->
+    <div class="flex flex-wrap items-center gap-2">
+      <a
+        href={`https://${domain.domain}`}
+        target="_blank"
+        rel="noreferrer"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-secondary hover:text-blue-300 transition-colors shadow-xs"
+        title="Truy cập website"
+      >
+        <ExternalLink size={13} />
+        <span>Truy cập</span>
+      </a>
+
+      <a
+        href={`https://www.google.com/search?q=site:${encodeURIComponent(domain.domain)}`}
+        target="_blank"
+        rel="noreferrer"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-amber-400 hover:bg-secondary hover:text-amber-300 transition-colors shadow-xs"
+        title="Tìm kiếm Google Index (site:...)"
+      >
+        <Search size={13} />
+        <span>Google site:</span>
+      </a>
+
       <div class="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 shadow-xs">
         <span class="h-2.5 w-2.5 rounded-full {domain.status === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}" />
         <span class="text-xs font-medium text-foreground capitalize">{domain.status}</span>
