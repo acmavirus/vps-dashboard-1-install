@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte"
-  import { ArrowLeft, Globe, Terminal, FileText, Settings, ShieldCheck, Loader2, AlertTriangle, Save, Check, ExternalLink, Search } from "lucide-svelte"
+  import { ArrowLeft, Globe, Terminal, FileText, Settings, ShieldCheck, Loader2, AlertTriangle, Save, Check, ExternalLink, Search, Activity } from "lucide-svelte"
   import type { DomainInfo } from "./types"
 
   export let token: string | null = null
@@ -221,6 +221,26 @@
             <div class="rounded-xl border border-border bg-card p-5 shadow-xs flex flex-col justify-between h-28">
               <span class="text-[10px] text-muted-foreground uppercase font-semibold">HTTP Code</span>
               <span class="text-3xl font-extrabold text-foreground tracking-tight mt-2 tabular-nums">{domain.code || "--"}</span>
+            </div>
+            <div class="rounded-xl border border-border bg-card p-5 shadow-xs flex flex-col justify-between h-28">
+              <span class="text-[10px] text-muted-foreground uppercase font-semibold">Truy cập hôm nay</span>
+              <div class="flex items-baseline gap-2 mt-2">
+                <span class="text-3xl font-extrabold text-cyan-400 tracking-tight tabular-nums">
+                  {(domain.daily_requests || 0).toLocaleString()}
+                </span>
+                <span class="text-xs text-cyan-400/80 font-medium flex items-center gap-0.5">
+                  <Activity size={12} /> /ngày
+                </span>
+              </div>
+            </div>
+            <div class="rounded-xl border border-border bg-card p-5 shadow-xs flex flex-col justify-between h-28">
+              <span class="text-[10px] text-muted-foreground uppercase font-semibold">Tổng lượt truy cập</span>
+              <div class="flex items-baseline gap-1 mt-2">
+                <span class="text-3xl font-extrabold text-foreground tracking-tight tabular-nums">
+                  {(domain.requests || 0).toLocaleString()}
+                </span>
+                <span class="text-xs text-muted-foreground">lượt</span>
+              </div>
             </div>
             <div class="rounded-xl border border-border bg-card p-5 shadow-xs flex flex-col justify-between sm:col-span-2 h-28">
               <span class="text-[10px] text-muted-foreground uppercase font-semibold">Đường dẫn gốc (Web Root)</span>

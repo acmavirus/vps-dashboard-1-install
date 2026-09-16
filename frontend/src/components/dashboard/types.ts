@@ -91,6 +91,7 @@ export interface DomainInfo {
   ssl_expiry?: string
   ssl_days?: number
   requests?: number
+  daily_requests?: number
 }
 
 export interface DomainDeleteState {
