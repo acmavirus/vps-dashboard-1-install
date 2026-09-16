@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RefreshCw, Trash2, Plus, X, Globe, Shield, ShieldCheck, ShieldAlert, Clock, Database, ArrowRight, Loader2, Star, ChevronDown, ChevronRight, ExternalLink, Search } from "lucide-svelte"
+  import { RefreshCw, Trash2, Plus, X, Globe, Shield, ShieldCheck, ShieldAlert, Clock, Database, ArrowRight, Loader2, Star, ChevronDown, ChevronRight, ExternalLink, Search, Activity } from "lucide-svelte"
   import type { DomainInfo, DomainDeleteState, DomainNoteState } from "./types"
   import { toast } from "../../lib/toast"
   import ConfirmModal from "../ConfirmModal.svelte"
@@ -163,6 +163,7 @@
     totalSSL: number
     totalOnline: number
     totalOffline: number
+    totalDailyRequests: number
   }
 
   /**
@@ -217,6 +218,7 @@
           totalSSL: 0,
           totalOnline: 0,
           totalOffline: 0,
+          totalDailyRequests: 0,
         })
       }
       const group = map.get(root)!
@@ -224,6 +226,7 @@
       if (d.ssl_active) group.totalSSL++
       if (d.status === "online") group.totalOnline++
       else if (d.status === "offline") group.totalOffline++
+      group.totalDailyRequests += (d.daily_requests || 0)
       group.expanded = expandedGroups.has(root)
     }
 
@@ -321,6 +324,14 @@
                 </span>
               {/if}
 
+              <!-- Daily Requests summary -->
+              {#if group.totalDailyRequests > 0}
+                <span class="inline-flex items-center gap-1 text-[10px] text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full font-mono" title={`Tổng truy cập hôm nay của nhóm: ${group.totalDailyRequests.toLocaleString()} lượt`}>
+                  <Activity size={11} />
+                  {group.totalDailyRequests.toLocaleString()} /ngày
+                </span>
+              {/if}
+
               <!-- SSL summary -->
               {#if group.totalSSL === group.subdomains.length}
                 <span class="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
@@ -398,6 +409,18 @@
                     <span class="tabular-nums font-mono w-10 text-right {domain.code >= 200 && domain.code < 400 ? 'text-emerald-400' : 'text-rose-400'}">
                       {domain.code || "--"}
                     </span>
+                  </div>
+
+                  <!-- Daily Requests Column -->
+                  <div
+                    class="flex items-center gap-1.5 shrink-0 px-2.5 py-1 rounded-md bg-secondary/30 text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-colors cursor-default"
+                    title={`Truy cập hôm nay: ${(domain.daily_requests || 0).toLocaleString()} lượt\nTổng tích lũy: ${(domain.requests || 0).toLocaleString()} lượt`}
+                  >
+                    <Activity size={12} class="text-cyan-400 shrink-0" />
+                    <span class="font-mono tabular-nums text-xs font-semibold text-foreground">
+                      {(domain.daily_requests || 0).toLocaleString()}
+                    </span>
+                    <span class="text-[10px] text-muted-foreground">/ngày</span>
                   </div>
 
                   <!-- SSL badge -->

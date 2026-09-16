@@ -67,7 +67,8 @@ type DomainInfo struct {
 	SSLIssuer   string    `json:"ssl_issuer"`
 	SSLExpiry   time.Time `json:"ssl_expiry"`
 	SSLDays     int       `json:"ssl_days"`
-	Requests    int64     `json:"requests"`
+	Requests      int64     `json:"requests"`
+	DailyRequests int64     `json:"daily_requests"`
 }
 
 type SSLCertInfo struct {

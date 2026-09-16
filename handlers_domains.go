@@ -721,9 +721,11 @@ func deleteDomain(domain string, deleteDB bool, deleteRoot bool) (domainDeleteRe
 }
 
 type logCountCacheItem struct {
-	size    int64
-	count   int64
-	modTime time.Time
+	size       int64
+	count      int64
+	dailyCount int64
+	cachedDate string
+	modTime    time.Time
 }
 
 var (
@@ -731,49 +733,55 @@ var (
 	logCountCacheMutex sync.Mutex
 )
 
-func countLogRequests(path string) int64 {
+func countLogRequests(path string) (int64, int64) {
 	fileInfo, err := os.Stat(path)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
+
+	todayStr := time.Now().Format("02/Jan/2006")
+	datePattern := "[" + todayStr + ":"
 
 	logCountCacheMutex.Lock()
 	cached, exists := logCountCache[path]
 	logCountCacheMutex.Unlock()
 
-	if exists && cached.size == fileInfo.Size() && cached.modTime.Equal(fileInfo.ModTime()) {
-		return cached.count
+	if exists && cached.size == fileInfo.Size() && cached.modTime.Equal(fileInfo.ModTime()) && cached.cachedDate == todayStr {
+		return cached.count, cached.dailyCount
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
-		return 0
+		return 0, 0
 	}
 	defer file.Close()
 
 	var count int64 = 0
-	buf := make([]byte, 32*1024)
-	for {
-		c, err := file.Read(buf)
-		if err != nil {
-			break
-		}
-		for i := 0; i < c; i++ {
-			if buf[i] == '\n' {
-				count++
-			}
+	var dailyCount int64 = 0
+
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		count++
+		if strings.Contains(line, datePattern) {
+			dailyCount++
 		}
 	}
 
 	logCountCacheMutex.Lock()
 	logCountCache[path] = logCountCacheItem{
-		size:    fileInfo.Size(),
-		count:   count,
-		modTime: fileInfo.ModTime(),
+		size:       fileInfo.Size(),
+		count:      count,
+		dailyCount: dailyCount,
+		cachedDate: todayStr,
+		modTime:    fileInfo.ModTime(),
 	}
 	logCountCacheMutex.Unlock()
 
-	return count
+	return count, dailyCount
 }
 
 func getDomains(scan bool) []DomainInfo {
@@ -791,7 +799,9 @@ func getDomains(scan bool) []DomainInfo {
 			cachedDomains[i].IsStarred = getDomainStarredSQL(d.Domain)
 			
 			accessLogPath := filepath.Join(paths.nginxLogDir, d.Domain+"_access.log")
-			cachedDomains[i].Requests = countLogRequests(accessLogPath)
+			reqTotal, reqDaily := countLogRequests(accessLogPath)
+			cachedDomains[i].Requests = reqTotal
+			cachedDomains[i].DailyRequests = reqDaily
 
 			if c, found := certMap[strings.ToLower(d.Domain)]; found {
 				cachedDomains[i].SSLActive = true
@@ -869,19 +879,20 @@ func getDomains(scan bool) []DomainInfo {
 		}
 
 		accessLogPath := filepath.Join(paths.nginxLogDir, domain+"_access.log")
-		requests := countLogRequests(accessLogPath)
+		requests, dailyRequests := countLogRequests(accessLogPath)
 
 		list = append(list, DomainInfo{
-			Domain:      domain,
-			Status:      status,
-			Code:        code,
-			Note:        getDomainNoteSQL(domain),
-			IsStarred:   getDomainStarredSQL(domain),
-			SSLActive:   sslActive,
-			SSLIssuer:   sslIssuer,
-			SSLExpiry:   sslExpiry,
-			SSLDays:     sslDays,
-			Requests:    requests,
+			Domain:        domain,
+			Status:        status,
+			Code:          code,
+			Note:          getDomainNoteSQL(domain),
+			IsStarred:     getDomainStarredSQL(domain),
+			SSLActive:     sslActive,
+			SSLIssuer:     sslIssuer,
+			SSLExpiry:     sslExpiry,
+			SSLDays:       sslDays,
+			Requests:      requests,
+			DailyRequests: dailyRequests,
 		})
 	}
 
